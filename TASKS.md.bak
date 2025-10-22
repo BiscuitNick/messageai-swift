@@ -14,78 +14,78 @@
 **Priority**: Critical
 
 #### Subtasks:
-- [x] Create Firebase project in Firebase Console
-- [x] Enable Authentication (Email/Password)
-- [x] Enable Firestore Database
+- [ ] Create Firebase project in Firebase Console
+- [ ] Enable Authentication (Email/Password)
+- [ ] Enable Firestore Database
 - [ ] Enable Cloud Messaging (FCM)
-- [x] Enable Storage (for profile pictures)
-- [x] Download GoogleService-Info.plist
+- [ ] Enable Storage (for profile pictures)
+- [ ] Download GoogleService-Info.plist
 - [ ] Configure Firestore security rules (basic structure)
 - [ ] Set up Firestore indexes for conversations and messages
-- [x] Test Firebase connection from iOS app
+- [ ] Test Firebase connection from iOS app
 
 ### Task 1.2: Xcode Project Configuration
 **Duration**: 1 hour  
 **Priority**: Critical
 
 #### Subtasks:
-- [x] Add Firebase SDK via Swift Package Manager
-- [x] Add GoogleService-Info.plist to Xcode project
-- [x] Configure Firebase in App file
-- [x] Set minimum iOS deployment target to 17.0
-- [x] Configure app capabilities (Push Notifications, Background Modes)
-- [x] Set up proper bundle identifier and signing
-- [x] Test Firebase initialization
+- [ ] Add Firebase SDK via Swift Package Manager
+- [ ] Add GoogleService-Info.plist to Xcode project
+- [ ] Configure Firebase in AppDelegate/App file
+- [ ] Set minimum iOS deployment target to 17.0
+- [ ] Configure app capabilities (Push Notifications, Background Modes)
+- [ ] Set up proper bundle identifier and signing
+- [ ] Test Firebase initialization
 
 ### Task 1.3: SwiftData Models
 **Duration**: 1.5 hours  
 **Priority**: Critical
 
 #### Subtasks:
-- [x] Create User model with @Model
-  - [x] id: String
-  - [x] email: String
-  - [x] displayName: String
-  - [x] profilePictureURL: String?
-  - [x] isOnline: Bool
-  - [x] lastSeen: Date
-  - [x] createdAt: Date
-- [x] Create Conversation model with @Model
-  - [x] id: String
-  - [x] participantIds: [String]
-  - [x] isGroup: Bool
-  - [x] groupName: String?
-  - [x] groupPictureURL: String?
-  - [x] adminIds: [String]
-  - [x] lastMessage: String?
-  - [x] lastMessageTimestamp: Date?
-  - [x] unreadCount: [String: Int]
-  - [x] createdAt: Date
-- [x] Create Message model with @Model
-  - [x] id: String
-  - [x] conversationId: String
-  - [x] senderId: String
-  - [x] text: String
-  - [x] timestamp: Date
-  - [x] deliveryStatus: DeliveryStatus enum
-  - [x] readBy: [String]
-- [x] Create DeliveryStatus enum (sending, sent, delivered, read)
-- [x] Configure SwiftData container in App file
-- [x] Test model creation and persistence
+- [ ] Create User model with @Model
+  - [ ] id: String
+  - [ ] email: String
+  - [ ] displayName: String
+  - [ ] profilePictureURL: String?
+  - [ ] isOnline: Bool
+  - [ ] lastSeen: Date
+  - [ ] createdAt: Date
+- [ ] Create Conversation model with @Model
+  - [ ] id: String
+  - [ ] participantIds: [String]
+  - [ ] isGroup: Bool
+  - [ ] groupName: String?
+  - [ ] groupPictureURL: String?
+  - [ ] adminIds: [String]
+  - [ ] lastMessage: String?
+  - [ ] lastMessageTimestamp: Date?
+  - [ ] unreadCount: [String: Int]
+  - [ ] createdAt: Date
+- [ ] Create Message model with @Model
+  - [ ] id: String
+  - [ ] conversationId: String
+  - [ ] senderId: String
+  - [ ] text: String
+  - [ ] timestamp: Date
+  - [ ] deliveryStatus: DeliveryStatus enum
+  - [ ] readBy: [String]
+- [ ] Create DeliveryStatus enum (sending, sent, delivered, read)
+- [ ] Configure SwiftData container in App file
+- [ ] Test model creation and persistence
 
 ### Task 1.4: Firebase Auth Integration
 **Duration**: 0.5 hours  
 **Priority**: Critical
 
 #### Subtasks:
-- [x] Create AuthService class with @Observable
-- [x] Implement signUp(email, password, displayName)
-- [x] Implement signIn(email, password)
-- [x] Implement signOut()
-- [x] Implement getCurrentUser()
-- [x] Add auth state listener
-- [x] Handle auth errors with user-friendly messages
-- [ ] Test authentication flow (multi-device)
+- [ ] Create AuthService class with @Observable
+- [ ] Implement signUp(email, password, displayName)
+- [ ] Implement signIn(email, password)
+- [ ] Implement signOut()
+- [ ] Implement getCurrentUser()
+- [ ] Add auth state listener
+- [ ] Handle auth errors with user-friendly messages
+- [ ] Test authentication flow
 
 ---
 
@@ -96,27 +96,27 @@
 **Priority**: Critical
 
 #### Subtasks:
-- [x] Create FirestoreService class with @Observable
-- [x] Implement user document creation/update
-- [x] Implement conversation document creation
-- [x] Implement message subcollection structure
+- [ ] Create FirestoreService class with @Observable
+- [ ] Implement user document creation/update
+- [ ] Implement conversation document creation
+- [ ] Implement message subcollection structure
 - [ ] Add Firestore security rules for users collection
 - [ ] Add Firestore security rules for conversations collection
 - [ ] Add Firestore security rules for messages subcollection
-- [ ] Test Firestore read/write operations (instrumented)
+- [ ] Test Firestore read/write operations
 
 ### Task 2.2: Message Sending/Receiving
 **Duration**: 2 hours  
 **Priority**: Critical
 
 #### Subtasks:
-- [x] Implement sendMessage(conversationId, text) function
-- [x] Add message to local SwiftData immediately (optimistic update)
-- [x] Write message to Firestore messages subcollection
-- [x] Handle send failures with retry logic
-- [ ] Update message delivery status on success (delivered/read propagation)
-- [x] Implement receiveMessage listener for real-time updates
-- [x] Sync received messages to local SwiftData
+- [ ] Implement sendMessage(conversationId, text) function
+- [ ] Add message to local SwiftData immediately (optimistic update)
+- [ ] Write message to Firestore messages subcollection
+- [ ] Handle send failures with retry logic
+- [ ] Update message delivery status on success
+- [ ] Implement receiveMessage listener for real-time updates
+- [ ] Sync received messages to local SwiftData
 - [ ] Test message sending between two devices
 
 ### Task 2.3: Real-Time Listeners
@@ -124,22 +124,22 @@
 **Priority**: Critical
 
 #### Subtasks:
-- [x] Implement conversation listener (for conversation list updates)
-- [x] Implement messages listener (for real-time message updates)
-- [x] Implement user presence listener (for online/offline status)
+- [ ] Implement conversation listener (for conversation list updates)
+- [ ] Implement messages listener (for real-time message updates)
+- [ ] Implement user presence listener (for online/offline status)
 - [ ] Add typing indicator listener
-- [x] Handle listener cleanup on view disappear
+- [ ] Handle listener cleanup on view disappear
 - [ ] Implement offline/online detection
-- [x] Update user presence on app lifecycle changes
-- [ ] Test real-time updates (multi-session)
+- [ ] Update user presence on app lifecycle changes
+- [ ] Test real-time updates
 
 ### Task 2.4: Local Persistence
 **Duration**: 1 hour  
 **Priority**: Critical
 
 #### Subtasks:
-- [x] Implement sync from Firestore to SwiftData
-- [x] Implement sync from SwiftData to Firestore
+- [ ] Implement sync from Firestore to SwiftData
+- [ ] Implement sync from SwiftData to Firestore
 - [ ] Add offline message queuing
 - [ ] Implement message retry on network restore
 - [ ] Add data migration handling
@@ -155,13 +155,13 @@
 **Priority**: High
 
 #### Subtasks:
-- [x] Create ConversationsListView with SwiftUI
-- [x] Implement conversation list with ForEach
-- [x] Add last message preview display
-- [x] Add unread count badge
+- [ ] Create ConversationsListView with SwiftUI
+- [ ] Implement conversation list with ForEach
+- [ ] Add last message preview display
+- [ ] Add unread count badge
 - [ ] Add online status indicator (green dot)
-- [ ] Add search / pull-to-refresh functionality
-- [x] Add navigation to chat screen
+- [ ] Add pull-to-refresh functionality
+- [ ] Add navigation to chat screen
 - [ ] Add swipe-to-delete (optional)
 - [ ] Style with modern UI (WhatsApp/iMessage-like)
 - [ ] Add loading states and error handling
@@ -171,14 +171,14 @@
 **Priority**: High
 
 #### Subtasks:
-- [x] Create ChatView with SwiftUI
-- [x] Implement message list with ScrollViewReader
-- [x] Add message bubble styling (sent vs received)
+- [ ] Create ChatView with SwiftUI
+- [ ] Implement message list with ScrollViewReader
+- [ ] Add message bubble styling (sent vs received)
 - [ ] Add profile picture for each message
-- [x] Add message timestamps
+- [ ] Add message timestamps
 - [ ] Add delivery status indicators (checkmarks)
-- [x] Implement text input field with send button
-- [x] Add auto-scroll to bottom on new messages
+- [ ] Implement text input field with send button
+- [ ] Add auto-scroll to bottom on new messages
 - [ ] Add message grouping by date
 - [ ] Style with modern chat UI
 
@@ -187,13 +187,13 @@
 **Priority**: High
 
 #### Subtasks:
-- [x] Show "sending" state with loading indicator
-- [x] Update to "sent" when Firestore confirms
+- [ ] Show "sending" state with loading indicator
+- [ ] Update to "sent" when Firestore confirms
 - [ ] Update to "delivered" when recipient receives
-- [x] Update to "read" when recipient opens conversation
-- [x] Handle temporary message IDs
+- [ ] Update to "read" when recipient opens conversation
+- [ ] Handle temporary message IDs
 - [ ] Replace temp ID with Firestore ID on confirmation
-- [x] Add error state for failed sends
+- [ ] Add error state for failed sends
 - [ ] Test optimistic updates flow
 
 ### Task 3.4: Read Receipts
@@ -258,9 +258,9 @@
 **Priority**: High
 
 #### Subtasks:
-- [x] Configure FCM in iOS app
-- [x] Request notification permissions
-- [x] Implement foreground notification handling
+- [ ] Configure FCM in iOS app
+- [ ] Request notification permissions
+- [ ] Implement foreground notification handling
 - [ ] Add notification tap to open conversation
 - [ ] Implement badge count for unread messages
 - [ ] Add sender name and message preview
@@ -382,33 +382,6 @@
 - [ ] ✅ No message loss in any test scenario
 - [ ] ✅ App performs well on physical iOS device
 - [ ] ✅ Code is clean and maintainable for future AI features
-
----
-
-## Current Focus & Next Steps
-
-1. **Lock down Firebase backend**
-   - Author security rules + indexes
-   - Turn on / validate foreground FCM alerts
-
-2. **Realtime polish**
-   - Propagate delivered/read states back to senders (replace temp IDs)
-   - Surface presence + typing indicators in the UI
-
-3. **Offline resilience**
-   - Queue unsent messages, retry on reconnect
-   - Stress tests: airplane mode, force quit mid-send
-   - Persist failed sends with exponential backoff
-   - Surface send errors with retry button
-
-4. **UI enhancements**
-   - Presence dot & search/pull-to-refresh in conversation list
-   - Chat bubble avatars, grouped timestamps, delivery icons
-
-5. **Multi-device QA**
-   - Two-device chat, group scenario, notification flow
-   - Physical device run + performance/profile pass
-   - Foreground push alert verification (FCM token, APNs sandbox)
 
 ---
 

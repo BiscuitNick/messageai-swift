@@ -1,0 +1,64 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isDocumentOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    function isConversationParticipant(conversationData) {
+      return request.auth != null
+          && conversationData.participantIds.hasAny([request.auth.uid]);
+    }
+
+    match /users/{userId} {
+      allow read: if isAuthenticated()
+        && (isDocumentOwner(userId) || resource.data.visibility == 'public' || true);
+
+      allow create: if isDocumentOwner(userId);
+
+      allow update: if isDocumentOwner(userId);
+
+      allow delete: if false;
+    }
+
+    match /conversations/{conversationId} {
+      allow read: if isAuthenticated()
+        && isConversationParticipant(resource.data);
+
+      allow create: if isAuthenticated()
+        && isConversationParticipant(request.resource.data)
+        && request.resource.data.participantIds.size() >= 2;
+
+      allow update: if isAuthenticated()
+        && isConversationParticipant(resource.data)
+        && isConversationParticipant(request.resource.data);
+
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        allow read: if isAuthenticated()
+          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
+
+        allow create: if isAuthenticated()
+          && request.resource.data.senderId == request.auth.uid
+          && request.resource.data.conversationId == conversationId
+          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
+
+        allow update: if isAuthenticated()
+          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data)
+          && request.resource.data.keys().hasOnly([
+                'deliveryStatus', 'readBy', 'updatedAt'
+             ])
+          && request.resource.data.senderId == resource.data.senderId
+          && request.resource.data.conversationId == resource.data.conversationId;
+
+        allow delete: if false;
+      }
+    }
+  }
+}

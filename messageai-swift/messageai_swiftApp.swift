@@ -8,12 +8,16 @@
 import SwiftUI
 import SwiftData
 import FirebaseCore
+import FirebaseMessaging
+import UserNotifications
 
 @main
 struct messageai_swiftApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @State private var authService: AuthService
     @State private var firestoreService: FirestoreService
     @State private var messagingService: MessagingService
+    @State private var notificationService: NotificationService
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
             UserEntity.self,
@@ -32,9 +36,13 @@ struct messageai_swiftApp: App {
     init() {
         FirebaseApp.configure()
         let firestore = FirestoreService()
+        let notification = NotificationService()
+        notification.configure()
         _firestoreService = State(wrappedValue: firestore)
         _authService = State(wrappedValue: AuthService())
         _messagingService = State(wrappedValue: MessagingService())
+        _notificationService = State(wrappedValue: notification)
+        appDelegate.notificationService = notification
     }
 
     var body: some Scene {
@@ -43,7 +51,26 @@ struct messageai_swiftApp: App {
                 .environment(authService)
                 .environment(firestoreService)
                 .environment(messagingService)
+                .environment(notificationService)
         }
         .modelContainer(sharedModelContainer)
+    }
+}
+
+final class AppDelegate: NSObject, UIApplicationDelegate {
+    var notificationService: NotificationService?
+
+    func application(
+        _ application: UIApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+        notificationService?.handleDeviceToken(deviceToken)
+    }
+
+    func application(
+        _ application: UIApplication,
+        didFailToRegisterForRemoteNotificationsWithError error: Error
+    ) {
+        print("[AppDelegate] Failed to register for remote notifications:", error.localizedDescription)
     }
 }

@@ -10,6 +10,7 @@ import Observation
 import SwiftData
 import FirebaseAuth
 import FirebaseCore
+import FirebaseStorage
 import GoogleSignIn
 import UIKit
 
@@ -35,6 +36,9 @@ final class AuthService {
     @ObservationIgnored private var modelContext: ModelContext?
     @ObservationIgnored private var firestoreService: FirestoreService?
     @ObservationIgnored private var lastKnownUserId: String?
+    @ObservationIgnored private var lastActivityTimestamp: Date = Date()
+    @ObservationIgnored private var presenceHeartbeatTask: Task<Void, Never>?
+    @ObservationIgnored private var offlineTimerTask: Task<Void, Never>?
 
     init() {
         authStateHandle = Auth.auth().addStateDidChangeListener { [weak self] _, user in
@@ -96,8 +100,14 @@ final class AuthService {
 
     func signOut() {
         do {
+            let signingOutUserId = currentUser?.id ?? lastKnownUserId
+            cancelPresenceTasks()
+            if let signingOutUserId {
+                Task { await self.markUserOffline(userId: signingOutUserId) }
+            }
             try Auth.auth().signOut()
             GIDSignIn.sharedInstance.signOut()
+            firestoreService?.stopUserListener()
             errorMessage = nil
         } catch {
             errorMessage = userFriendlyMessage(for: error)
@@ -109,10 +119,18 @@ final class AuthService {
             let userId = currentUser?.id ?? lastKnownUserId
             currentUser = nil
             lastKnownUserId = nil
+            firestoreService?.stopUserListener()
+            cancelPresenceTasks()
             if let userId {
                 await setUserOffline(userId: userId)
             }
+            clearLocalData()
             return
+        }
+
+        let previousUserId = currentUser?.id ?? lastKnownUserId
+        if let previousUserId, previousUserId != user.uid {
+            clearLocalData()
         }
 
         let appUser = AppUser(
@@ -126,6 +144,8 @@ final class AuthService {
         lastKnownUserId = appUser.id
         errorMessage = nil
         await persistUser(appUser)
+        await markCurrentUserOnline()
+        startHeartbeatIfNeeded()
     }
 
     func signInWithGoogle(presentingViewController: UIViewController) async {
@@ -174,7 +194,7 @@ final class AuthService {
     }
 
     private func persistUser(_ appUser: AppUser) async {
-        guard let modelContext else { return }
+        guard let modelContext = modelContext else { return }
 
         let targetId = appUser.id
         var descriptor = FetchDescriptor<UserEntity>(
@@ -219,8 +239,26 @@ final class AuthService {
         }
     }
 
+    func markCurrentUserOnline() async {
+        guard let userId = currentUser?.id ?? lastKnownUserId else { return }
+        let now = Date()
+        lastActivityTimestamp = now
+        await updatePresence(userId: userId, isOnline: true, lastSeenOverride: now)
+    }
+
+    func markCurrentUserOffline() async {
+        guard let userId = currentUser?.id ?? lastKnownUserId else { return }
+        await markUserOffline(userId: userId)
+    }
+
+    private func markUserOffline(userId: String, lastSeenOverride: Date? = nil) async {
+        let timestamp = lastSeenOverride ?? Date()
+        lastActivityTimestamp = timestamp
+        await updatePresence(userId: userId, isOnline: false, lastSeenOverride: timestamp)
+    }
+
     private func setUserOffline(userId: String) async {
-        guard let modelContext else { return }
+        guard let modelContext = modelContext else { return }
 
         let targetId = userId
         var descriptor = FetchDescriptor<UserEntity>(
@@ -230,22 +268,193 @@ final class AuthService {
         )
         descriptor.fetchLimit = 1
 
+        let now = Date()
+        lastActivityTimestamp = now
+        await updatePresence(userId: userId, isOnline: false, descriptor: descriptor, lastSeenOverride: now)
+    }
+
+    private func clearLocalData() {
+        guard let modelContext = modelContext else { return }
+
         do {
-            if let existing = try modelContext.fetch(descriptor).first {
-                existing.isOnline = false
-                existing.lastSeen = Date()
+            try deleteAll(from: modelContext, entity: MessageEntity.self)
+            try deleteAll(from: modelContext, entity: ConversationEntity.self)
+            try deleteAll(from: modelContext, entity: UserEntity.self)
+            try modelContext.save()
+        } catch {
+            debugLog("Failed to clear local data: \(error.localizedDescription)")
+        }
+    }
+
+    private func deleteAll<T: PersistentModel>(from context: ModelContext, entity: T.Type) throws {
+        var descriptor = FetchDescriptor<T>()
+        descriptor.includePendingChanges = true
+        let items = try context.fetch(descriptor)
+        items.forEach { context.delete($0) }
+    }
+
+    private func updatePresence(
+        userId: String,
+        isOnline: Bool,
+        descriptor: FetchDescriptor<UserEntity>? = nil,
+        lastSeenOverride: Date? = nil
+    ) async {
+        guard let modelContext = modelContext else { return }
+
+        let fetchDescriptor: FetchDescriptor<UserEntity>
+        if let descriptor {
+            fetchDescriptor = descriptor
+        } else {
+            var temp = FetchDescriptor<UserEntity>(
+                predicate: #Predicate<UserEntity> { user in
+                    user.id == userId
+                }
+            )
+            temp.fetchLimit = 1
+            fetchDescriptor = temp
+        }
+
+        let timestamp = lastSeenOverride ?? Date()
+
+        do {
+            if let existing = try modelContext.fetch(fetchDescriptor).first {
+                existing.isOnline = isOnline
+                existing.lastSeen = timestamp
                 try modelContext.save()
             }
         } catch {
-            errorMessage = "Failed to update user status: \(error.localizedDescription)"
+            debugLog("Failed to update local presence: \(error.localizedDescription)")
         }
 
-        if let service = firestoreService {
-            do {
-                try await service.updatePresence(userId: userId, isOnline: false)
-            } catch {
-                debugLog("Failed to update Firestore presence: \(error.localizedDescription)")
+        guard let service = firestoreService else { return }
+
+        do {
+            try await service.updatePresence(userId: userId, isOnline: isOnline, lastSeen: timestamp)
+        } catch {
+            debugLog("Failed to update Firestore presence: \(error.localizedDescription)")
+        }
+    }
+
+    func sceneDidBecomeActive() {
+        cancelOfflineTimer()
+        startHeartbeatIfNeeded()
+        Task { await self.markCurrentUserOnline() }
+    }
+
+    func sceneDidEnterBackground() {
+        stopHeartbeat()
+        guard currentUser != nil || lastKnownUserId != nil else {
+            cancelOfflineTimer()
+            return
+        }
+        lastActivityTimestamp = Date()
+        scheduleOfflineTimer()
+    }
+
+    private func startHeartbeatIfNeeded() {
+        guard presenceHeartbeatTask == nil else { return }
+        guard currentUser != nil || lastKnownUserId != nil else { return }
+        presenceHeartbeatTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                await self.markCurrentUserOnline()
+                try? await Task.sleep(for: .seconds(60))
             }
+        }
+    }
+
+    private func stopHeartbeat() {
+        presenceHeartbeatTask?.cancel()
+        presenceHeartbeatTask = nil
+    }
+
+    private func scheduleOfflineTimer() {
+        cancelOfflineTimer()
+        let reference = lastActivityTimestamp
+        offlineTimerTask = Task { [weak self] in
+            guard let self else { return }
+            guard let userId = self.currentUser?.id ?? self.lastKnownUserId else { return }
+            try? await Task.sleep(for: .seconds(600))
+            guard !Task.isCancelled else { return }
+            await self.markUserOffline(userId: userId, lastSeenOverride: reference)
+        }
+    }
+
+    private func cancelOfflineTimer() {
+        offlineTimerTask?.cancel()
+        offlineTimerTask = nil
+    }
+
+    private func cancelPresenceTasks() {
+        stopHeartbeat()
+        cancelOfflineTimer()
+    }
+
+    func updateProfilePhoto(with imageData: Data) async {
+        errorMessage = nil
+        guard let userId = currentUser?.id ?? lastKnownUserId else {
+            errorMessage = "No authenticated user."
+            return
+        }
+
+        do {
+            let compressedData = imageData
+            let storageRef = Storage.storage().reference()
+                .child("profilePictures/\(userId).jpg")
+
+            let metadata = StorageMetadata()
+            metadata.contentType = "image/jpeg"
+
+            _ = try await storageRef.putDataAsync(compressedData, metadata: metadata)
+            let downloadURL = try await storageRef.downloadURL()
+
+            if let authUser = Auth.auth().currentUser {
+                let changeRequest = authUser.createProfileChangeRequest()
+                changeRequest.photoURL = downloadURL
+                try await changeRequest.commitChanges()
+            }
+
+            let updatedUser = AppUser(
+                id: userId,
+                email: currentUser?.email ?? "",
+                displayName: currentUser?.displayName ?? Constants.defaultDisplayName,
+                photoURL: downloadURL
+            )
+
+            currentUser = updatedUser
+            lastKnownUserId = updatedUser.id
+
+            await updateLocalUserPhoto(userId: userId, photoURL: downloadURL)
+
+            if let service = firestoreService {
+                do {
+                    try await service.updateUserProfilePhoto(userId: userId, photoURL: downloadURL)
+                } catch {
+                    debugLog("Failed to sync profile photo: \(error.localizedDescription)")
+                }
+            }
+        } catch {
+            errorMessage = "Failed to update photo: \(error.localizedDescription)"
+        }
+    }
+
+    private func updateLocalUserPhoto(userId: String, photoURL: URL) async {
+        guard let modelContext = modelContext else { return }
+
+        var descriptor = FetchDescriptor<UserEntity>(
+            predicate: #Predicate<UserEntity> { user in
+                user.id == userId
+            }
+        )
+        descriptor.fetchLimit = 1
+
+        do {
+            if let existing = try modelContext.fetch(descriptor).first {
+                existing.profilePictureURL = photoURL.absoluteString
+                try modelContext.save()
+            }
+        } catch {
+            debugLog("Failed to update local profile photo: \(error.localizedDescription)")
         }
     }
 

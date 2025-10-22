@@ -10,16 +10,44 @@ import Observation
 import SwiftData
 
 struct ContentView: View {
+    private enum TabSelection {
+        case chats
+        case users
+        case debug
+    }
+
     @Environment(AuthService.self) private var authService
     @Environment(FirestoreService.self) private var firestoreService
     @Environment(MessagingService.self) private var messagingService
+    @Environment(NotificationService.self) private var notificationService
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
     @State private var hasConfiguredContext = false
+    @State private var hasStartedUserListener = false
+    @State private var selectedTab: TabSelection = .chats
 
     var body: some View {
         Group {
             if let user = authService.currentUser {
-                ConversationsRootView(currentUser: user)
+                TabView(selection: $selectedTab) {
+                    ConversationsRootView(currentUser: user)
+                        .tabItem {
+                            Label("Chats", systemImage: "bubble.left.and.bubble.right")
+                        }
+                        .tag(TabSelection.chats)
+
+                    UsersDebugView(currentUser: user)
+                        .tabItem {
+                            Label("Users", systemImage: "person.3")
+                        }
+                        .tag(TabSelection.users)
+
+                    DebugView(currentUser: user)
+                        .tabItem {
+                            Label("Debug", systemImage: "wrench.and.screwdriver")
+                        }
+                        .tag(TabSelection.debug)
+                }
             } else {
                 AuthView()
             }
@@ -27,17 +55,49 @@ struct ContentView: View {
         .task {
             guard !hasConfiguredContext else { return }
             authService.configure(modelContext: modelContext, firestoreService: firestoreService)
+            firestoreService.startUserListener(modelContext: modelContext)
+            hasStartedUserListener = true
+            await notificationService.requestAuthorization()
+            await notificationService.registerForRemoteNotifications()
             if let userId = authService.currentUser?.id {
                 messagingService.configure(modelContext: modelContext, currentUserId: userId)
             }
+            await authService.markCurrentUserOnline()
+            authService.sceneDidBecomeActive()
             hasConfiguredContext = true
         }
         .onChange(of: authService.currentUser?.id) { _, newId in
-            guard let newId else {
-                messagingService.reset()
-                return
-            }
+            Task { @MainActor in
+                guard let newId else {
+                    if hasStartedUserListener {
+                        firestoreService.stopUserListener()
+                        hasStartedUserListener = false
+                    }
+                    messagingService.reset()
+                    authService.sceneDidEnterBackground()
+                    return
+                }
+                if !hasStartedUserListener {
+                    firestoreService.startUserListener(modelContext: modelContext)
+                    hasStartedUserListener = true
+                }
+                await notificationService.registerForRemoteNotifications()
                 messagingService.configure(modelContext: modelContext, currentUserId: newId)
+                await authService.markCurrentUserOnline()
+                authService.sceneDidBecomeActive()
+            }
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            Task {
+                switch newPhase {
+                case .active:
+                    authService.sceneDidBecomeActive()
+                case .background:
+                    authService.sceneDidEnterBackground()
+                default:
+                    break
+                }
+            }
         }
     }
 }
