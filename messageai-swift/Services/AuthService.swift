@@ -99,12 +99,20 @@ final class AuthService {
     }
 
     func signOut() {
+        Task { @MainActor in
+            await self.performSignOut()
+        }
+    }
+
+    private func performSignOut() async {
+        let signingOutUserId = currentUser?.id ?? lastKnownUserId
+        cancelPresenceTasks()
+
+        if let signingOutUserId {
+            await markUserOffline(userId: signingOutUserId)
+        }
+
         do {
-            let signingOutUserId = currentUser?.id ?? lastKnownUserId
-            cancelPresenceTasks()
-            if let signingOutUserId {
-                Task { await self.markUserOffline(userId: signingOutUserId) }
-            }
             try Auth.auth().signOut()
             GIDSignIn.sharedInstance.signOut()
             firestoreService?.stopUserListener()
