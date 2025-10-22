@@ -6,56 +6,66 @@
 //
 
 import SwiftUI
+import Observation
 import SwiftData
 
 struct ContentView: View {
+    @Environment(AuthService.self) private var authService
+    @Environment(FirestoreService.self) private var firestoreService
     @Environment(\.modelContext) private var modelContext
-    @Query private var items: [Item]
+    @State private var hasConfiguredContext = false
 
     var body: some View {
-        NavigationSplitView {
-            List {
-                ForEach(items) { item in
-                    NavigationLink {
-                        Text("Item at \(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))")
-                    } label: {
-                        Text(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))
-                    }
-                }
-                .onDelete(perform: deleteItems)
+        Group {
+            if let user = authService.currentUser {
+                SignedInPlaceholderView(user: user)
+            } else {
+                AuthView()
             }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    EditButton()
-                }
-                ToolbarItem {
-                    Button(action: addItem) {
-                        Label("Add Item", systemImage: "plus")
-                    }
-                }
-            }
-        } detail: {
-            Text("Select an item")
         }
-    }
-
-    private func addItem() {
-        withAnimation {
-            let newItem = Item(timestamp: Date())
-            modelContext.insert(newItem)
-        }
-    }
-
-    private func deleteItems(offsets: IndexSet) {
-        withAnimation {
-            for index in offsets {
-                modelContext.delete(items[index])
-            }
+        .task {
+            guard !hasConfiguredContext else { return }
+            authService.configure(modelContext: modelContext, firestoreService: firestoreService)
+            hasConfiguredContext = true
         }
     }
 }
 
-#Preview {
-    ContentView()
-        .modelContainer(for: Item.self, inMemory: true)
+private struct SignedInPlaceholderView: View {
+    let user: AuthService.AppUser
+    @Environment(AuthService.self) private var authService
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 24) {
+                Image(systemName: "bubble.left.and.bubble.right.fill")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 96, height: 96)
+                    .foregroundStyle(.tint)
+
+                VStack(spacing: 8) {
+                    Text("Welcome back, \(user.displayName)!")
+                        .font(.title2.weight(.semibold))
+                    Text(user.email)
+                        .foregroundStyle(.secondary)
+                }
+
+                Text("Messaging features will appear here as we build them out.")
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.secondary)
+
+                Button(role: .destructive) {
+                    authService.signOut()
+                } label: {
+                    Text("Sign Out")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+            }
+            .padding()
+            .navigationTitle("MessageAI")
+        }
+    }
 }
