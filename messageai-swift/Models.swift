@@ -49,6 +49,7 @@ final class ConversationEntity {
     var lastMessageTimestamp: Date?
     var unreadCountData: Data
     var createdAt: Date
+    var updatedAt: Date
 
     init(
         id: String,
@@ -60,7 +61,8 @@ final class ConversationEntity {
         lastMessage: String? = nil,
         lastMessageTimestamp: Date? = nil,
         unreadCount: [String: Int] = [:],
-        createdAt: Date = .init()
+        createdAt: Date = .init(),
+        updatedAt: Date = .init()
     ) {
         self.id = id
         self.participantIdsData = LocalJSONCoder.encode(participantIds)
@@ -72,6 +74,7 @@ final class ConversationEntity {
         self.lastMessageTimestamp = lastMessageTimestamp
         self.unreadCountData = LocalJSONCoder.encode(unreadCount)
         self.createdAt = createdAt
+        self.updatedAt = updatedAt
     }
 
     var participantIds: [String] {
@@ -99,6 +102,7 @@ final class MessageEntity {
     var timestamp: Date
     var deliveryStatusRawValue: String
     var readByData: Data
+    var updatedAt: Date
 
     init(
         id: String,
@@ -107,7 +111,8 @@ final class MessageEntity {
         text: String,
         timestamp: Date = .init(),
         deliveryStatus: DeliveryStatus = .sending,
-        readBy: [String] = []
+        readBy: [String] = [],
+        updatedAt: Date = .init()
     ) {
         self.id = id
         self.conversationId = conversationId
@@ -116,6 +121,7 @@ final class MessageEntity {
         self.timestamp = timestamp
         self.deliveryStatusRawValue = deliveryStatus.rawValue
         self.readByData = LocalJSONCoder.encode(readBy)
+        self.updatedAt = updatedAt
     }
 
     var deliveryStatus: DeliveryStatus {

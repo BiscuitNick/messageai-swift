@@ -55,4 +55,30 @@ final class FirestoreService {
 
         try await userRef.setData(data, merge: true)
     }
+
+    func markConversationRead(conversationId: String, userId: String) async throws {
+        let conversationRef = db.collection("conversations").document(conversationId)
+        try await conversationRef.setData([
+            "unreadCount.\(userId)": 0,
+            "updatedAt": FieldValue.serverTimestamp()
+        ], merge: true)
+    }
+
+    func updateMessageDelivery(conversationId: String, messageId: String, status: DeliveryStatus, userId: String) async throws {
+        let messageRef = db.collection("conversations")
+            .document(conversationId)
+            .collection("messages")
+            .document(messageId)
+
+        var update: [String: Any] = [
+            "deliveryStatus": status.rawValue,
+            "updatedAt": FieldValue.serverTimestamp()
+        ]
+
+        if status == .read {
+            update["readBy"] = FieldValue.arrayUnion([userId])
+        }
+
+        try await messageRef.setData(update, merge: true)
+    }
 }

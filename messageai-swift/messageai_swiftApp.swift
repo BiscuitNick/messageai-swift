@@ -13,6 +13,7 @@ import FirebaseCore
 struct messageai_swiftApp: App {
     @State private var authService: AuthService
     @State private var firestoreService: FirestoreService
+    @State private var messagingService: MessagingService
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
             UserEntity.self,
@@ -30,8 +31,10 @@ struct messageai_swiftApp: App {
 
     init() {
         FirebaseApp.configure()
+        let firestore = FirestoreService()
+        _firestoreService = State(wrappedValue: firestore)
         _authService = State(wrappedValue: AuthService())
-        _firestoreService = State(wrappedValue: FirestoreService())
+        _messagingService = State(wrappedValue: MessagingService())
     }
 
     var body: some Scene {
@@ -39,6 +42,7 @@ struct messageai_swiftApp: App {
             ContentView()
                 .environment(authService)
                 .environment(firestoreService)
+                .environment(messagingService)
         }
         .modelContainer(sharedModelContainer)
     }
