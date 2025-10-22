@@ -1,5 +1,6 @@
 import * as admin from "firebase-admin";
-import { onCall } from "firebase-functions/v2/https";
+import { HttpsError, onCall } from "firebase-functions/v2/https";
+import type { CallableRequest } from "firebase-functions/v2/https";
 import { setGlobalOptions } from "firebase-functions/v2/options";
 
 if (!admin.apps.length) {
@@ -44,10 +45,10 @@ const DELIVERY_SENT = "sent";
 const COLLECTION_USERS = "users";
 const COLLECTION_CONVERSATIONS = "conversations";
 const SUBCOLLECTION_MESSAGES = "messages";
+const DIRECT_INTRO_MESSAGE = "Hey there! Ready to build something great today?";
 
 export const generateMockData = onCall(async (request) => {
-  // NOTE: Auth check temporarily disabled while testing with Emulator tokens.
-  const uid = request.auth?.uid ?? "mock-unauthenticated";
+  const uid = requireAuth(request);
 
   const timestamp = admin.firestore.Timestamp.now();
 
@@ -76,13 +77,8 @@ export const generateMockData = onCall(async (request) => {
       seedConversation({
         conversationId: deterministicConversationId("direct", [uid, contact.id]),
         participants: [uid, contact.id],
-        unreadCounts: {
-          [uid]: 1,
-          [contact.id]: 0,
-        },
-        lastMessage: `Hey ${contact.displayName.split(" ")[0]}, excited to build with MessageAI?`,
-        messageSender: contact.id,
         isGroup: false,
+        groupName: undefined,
       })
     );
   }
@@ -92,11 +88,6 @@ export const generateMockData = onCall(async (request) => {
     seedConversation({
       conversationId: deterministicConversationId("group", [uid, ...groupContacts.map((c) => c.id)]),
       participants: [uid, ...groupContacts.map((c) => c.id)],
-      unreadCounts: Object.fromEntries(
-        [uid, ...groupContacts.map((c) => c.id)].map((participant) => [participant, participant === uid ? 2 : 0])
-      ),
-      lastMessage: "Welcome to the MessageAI builders group!",
-      messageSender: uid,
       isGroup: true,
       groupName: "Product Squad",
     })
@@ -125,9 +116,6 @@ export const getServerTime = onCall(async () => {
 type SeedConversationArgs = {
   conversationId: string;
   participants: string[];
-  unreadCounts: Record<string, number>;
-  lastMessage: string;
-  messageSender: string;
   isGroup: boolean;
   groupName?: string;
 };
@@ -135,9 +123,6 @@ type SeedConversationArgs = {
 async function seedConversation({
   conversationId,
   participants,
-  unreadCounts,
-  lastMessage,
-  messageSender,
   isGroup,
   groupName,
 }: SeedConversationArgs) {
@@ -145,14 +130,36 @@ async function seedConversation({
   const now = admin.firestore.Timestamp.now();
 
   const adminId = participants[0];
+  const messageCount = randomInt(1, 25);
+
+  const orderedMessages: MockMessage[] = [];
+  const senders = shuffleArray(participants);
+
+  for (let i = 0; i < messageCount; i++) {
+    const daysAgo = randomInt(0, 60);
+    const secondsAgo = randomInt(0, 24 * 60 * 60);
+    const timestampDate = new Date(Date.now() - (daysAgo * 24 * 60 * 60 + secondsAgo) * 1000);
+    const sender = senders[i % senders.length];
+    orderedMessages.push({
+      senderId: sender,
+      text: randomMessageText(sender),
+      timestamp: timestampDate,
+    });
+  }
+
+  orderedMessages.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+
+  const lastMessage = orderedMessages[orderedMessages.length - 1];
+  const unreadCounts = computeUnreadCounts(participants, lastMessage.senderId);
+
   const conversationData: Record<string, unknown> = {
     participantIds: participants,
     isGroup,
     adminIds: [adminId],
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    lastMessage,
-    lastMessageTimestamp: now,
+    lastMessage: lastMessage.text,
+    lastMessageTimestamp: admin.firestore.Timestamp.fromDate(lastMessage.timestamp),
     unreadCount: unreadCounts,
     mockSeeded: true,
   };
@@ -163,21 +170,98 @@ async function seedConversation({
 
   await conversationRef.set(conversationData, { merge: true });
 
-  const messageId = "intro-message";
-  const messageRef = conversationRef.collection(SUBCOLLECTION_MESSAGES).doc(messageId);
-  await messageRef.set({
-    conversationId,
-    senderId: messageSender,
-    text: lastMessage,
-    timestamp: now,
-    deliveryStatus: DELIVERY_SENT,
-    readBy: [messageSender],
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    mockSeeded: true,
+  const messageWrites = orderedMessages.map((message) => {
+    const messageId = firestore.collection("_").doc().id;
+    const messageRef = conversationRef.collection(SUBCOLLECTION_MESSAGES).doc(messageId);
+    return messageRef.set({
+      conversationId,
+      senderId: message.senderId,
+      text: message.text,
+      timestamp: admin.firestore.Timestamp.fromDate(message.timestamp),
+      deliveryStatus: DELIVERY_SENT,
+      readBy: [message.senderId],
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      mockSeeded: true,
+    });
   });
+
+  await Promise.all(messageWrites);
 }
 
 function deterministicConversationId(prefix: string, participantIds: string[]): string {
   const sorted = [...participantIds].sort();
   return `${prefix}-${sorted.join("-")}`;
+}
+
+type MockMessage = {
+  senderId: string;
+  text: string;
+  timestamp: Date;
+};
+
+function randomInt(min: number, max: number): number {
+  const lower = Math.ceil(min);
+  const upper = Math.floor(max);
+  return Math.floor(Math.random() * (upper - lower + 1)) + lower;
+}
+
+function shuffleArray<T>(array: T[]): T[] {
+  const copy = [...array];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
+
+const MESSAGE_TEMPLATES = [
+  "Quick sync?",
+  "Let me know if you spot any issues.",
+  "Great progress today!",
+  "I'll tackle the next item on the list.",
+  "Can we circle back on this later?",
+  "Thanks for jumping in so quickly.",
+  "Pushing an update now.",
+  "I'll double-check the numbers.",
+  "Looping in the team.",
+  "Ship it! 🚀",
+];
+
+function randomMessageText(senderId: string): string {
+  const base = MESSAGE_TEMPLATES[randomInt(0, MESSAGE_TEMPLATES.length - 1)];
+  if (senderId.startsWith("mock-")) {
+    return base;
+  }
+  return `${base} (from me)`;
+}
+
+function computeUnreadCounts(participants: string[], lastSender: string): Record<string, number> {
+  const unread: Record<string, number> = {};
+  participants.forEach((participant) => {
+    unread[participant] = participant === lastSender ? 0 : randomInt(0, 3);
+  });
+  return unread;
+}
+
+export const deleteConversations = onCall(async (request) => {
+  requireAuth(request);
+  await admin.firestore().recursiveDelete(firestore.collection(COLLECTION_CONVERSATIONS));
+  return { status: "success" };
+});
+
+export const deleteUsers = onCall(async (request) => {
+  requireAuth(request);
+  await admin.firestore().recursiveDelete(firestore.collection(COLLECTION_USERS));
+  return { status: "success" };
+});
+
+function requireAuth<T>(request: CallableRequest<T>): string {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError(
+      "unauthenticated",
+      "Authentication is required for this operation."
+    );
+  }
+  return uid;
 }

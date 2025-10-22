@@ -12,21 +12,13 @@ import SwiftData
 struct ConversationsRootView: View {
     let currentUser: AuthService.AppUser
 
-    @Environment(AuthService.self) private var authService
-    @Environment(MessagingService.self) private var messagingService
-    @Environment(\.modelContext) private var modelContext
-
     @Query(sort: [SortDescriptor(\ConversationEntity.updatedAt, order: .reverse)])
     private var conversations: [ConversationEntity]
 
     @Query private var users: [UserEntity]
 
     @State private var isComposePresented = false
-    @State private var isProfilePresented = false
     @State private var selectedConversationID: String?
-    @State private var isSeedingMockData = false
-    @State private var isOpeningBotChat = false
-    @State private var alertData: AlertData?
     @State private var searchText: String = ""
 
     private var userLookup: [String: UserEntity] {
@@ -81,23 +73,11 @@ struct ConversationsRootView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        isProfilePresented = true
+                        isComposePresented = true
                     } label: {
-                        HStack(spacing: 8) {
-                            ProfileThumbnailView(
-                                photoURL: currentUser.photoURL,
-                                initials: initials(for: currentUser.displayName)
-                            )
-                            VStack(alignment: .leading, spacing: 0) {
-                                Text(currentUser.displayName)
-                                    .font(.headline.weight(.semibold))
-                                    .foregroundStyle(.primary)
-                                    .lineLimit(1)
-                            }
-                        }
-                        .padding(.vertical, 2)
+                        Image(systemName: "square.and.pencil")
                     }
-                    .accessibilityLabel("Open profile")
+                    .disabled(selectableUsers.isEmpty)
                 }
             }
         }
@@ -110,71 +90,7 @@ struct ConversationsRootView: View {
                 isComposePresented = false
             }
         }
-        .sheet(isPresented: $isProfilePresented) {
-            ProfileView(
-                user: currentUser,
-                onSignOut: {
-                    authService.signOut()
-                    messagingService.reset()
-                    selectedConversationID = nil
-                },
-                onStartBotChat: startBotChat,
-                onAddMockData: addMockData,
-                isBotBusy: isOpeningBotChat,
-                isMockBusy: isSeedingMockData
-            )
-        }
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search chats")
-        .alert(
-            alertData?.title ?? "",
-            isPresented: .init(
-                get: { alertData != nil },
-                set: { if !$0 { alertData = nil } }
-            ),
-            actions: {
-                Button("OK", role: .cancel) {
-                    alertData = nil
-                }
-            },
-            message: {
-                Text(alertData?.message ?? "")
-            }
-        )
-        .overlay(alignment: .bottom) {
-            ComposeButton(action: {
-                isComposePresented = true
-            }, isDisabled: selectableUsers.isEmpty)
-            .padding(.bottom, 24)
-        }
-    }
-
-    private func addMockData() {
-        guard !isSeedingMockData else { return }
-        isSeedingMockData = true
-        Task { @MainActor in
-            defer { isSeedingMockData = false }
-            do {
-                try await messagingService.seedMockData()
-                alertData = AlertData(title: "Mock Data Ready", message: "Added sample teammates and a demo conversation.")
-            } catch {
-                alertData = AlertData(title: "Error", message: error.localizedDescription)
-            }
-        }
-    }
-
-    private func startBotChat() {
-        guard !isOpeningBotChat else { return }
-        isOpeningBotChat = true
-        Task { @MainActor in
-            defer { isOpeningBotChat = false }
-            do {
-                let conversationId = try await messagingService.ensureBotConversation()
-                selectedConversationID = conversationId
-                alertData = AlertData(title: "Support Chat Ready", message: "Say hello to MessageAI Bot!")
-            } catch {
-                alertData = AlertData(title: "Error", message: error.localizedDescription)
-            }
-        }
     }
 
     private func conversationTitle(for conversation: ConversationEntity) -> String {
@@ -195,10 +111,6 @@ struct ConversationsRootView: View {
         return initials.joined().uppercased()
     }
 
-    private struct AlertData {
-        let title: String
-        let message: String
-    }
 }
 
 private struct ConversationRow: View {
@@ -255,7 +167,11 @@ private struct ConversationRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            AvatarPlaceholderView(initials: initials(for: title), status: presenceStatus)
+            AvatarPlaceholderView(
+                initials: initials(for: title),
+                profileURL: avatarProfileURL,
+                status: presenceStatus
+            )
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
@@ -298,86 +214,28 @@ private struct ConversationRow: View {
         let initials = components.prefix(2).compactMap { $0.first }.map(String.init)
         return initials.prefix(2).joined()
     }
-}
 
-private struct ProfileThumbnailView: View {
-    let photoURL: URL?
-    let initials: String
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .fill(Color.accentColor.opacity(0.2))
-
-            if let photoURL {
-                AsyncImage(url: photoURL) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    case .failure:
-                        Text(placeholderInitials)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(Color.accentColor)
-                    case .empty:
-                        ProgressView()
-                    @unknown default:
-                        EmptyView()
-                    }
-                }
-                .clipShape(Circle())
-            } else {
-                Text(placeholderInitials)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Color.accentColor)
-            }
+    private var avatarProfileURL: String? {
+        guard !conversation.isGroup else { return nil }
+        let otherParticipant = conversation.participantIds.first { $0 != currentUser.id }
+        if let otherParticipant,
+           let user = userLookup[otherParticipant],
+           let url = user.profilePictureURL,
+           !url.isEmpty {
+            return url
         }
-        .frame(width: 32, height: 32)
-    }
-
-    private var placeholderInitials: String {
-        initials.isEmpty ? "?" : initials
-    }
-}
-
-private struct ComposeButton: View {
-    let action: () -> Void
-    let isDisabled: Bool
-
-    var body: some View {
-        Button {
-            guard !isDisabled else { return }
-            action()
-        } label: {
-            Label("New Message", systemImage: "square.and.pencil")
-                .font(.headline.weight(.semibold))
-                .padding(.horizontal, 24)
-                .padding(.vertical, 14)
-                .background(
-                    Capsule(style: .circular)
-                        .fill(isDisabled ? Color.gray.opacity(0.2) : Color.accentColor)
-                )
-                .foregroundStyle(isDisabled ? Color.gray : Color.white)
-                .shadow(color: Color.black.opacity(isDisabled ? 0 : 0.2), radius: 8, x: 0, y: 4)
-        }
-        .buttonStyle(.plain)
-        .disabled(isDisabled)
+        return nil
     }
 }
 
 private struct AvatarPlaceholderView: View {
     let initials: String
+    let profileURL: String?
     let status: PresenceStatus
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
-            Circle()
-                .fill(Color.accentColor.opacity(0.15))
-            Text(initials.isEmpty ? "?" : initials.uppercased())
-                .font(.callout.weight(.semibold))
-                .foregroundStyle(Color.accentColor)
-
+            avatarContent
             Circle()
                 .fill(status.indicatorColor.opacity(status == .offline ? 0.4 : 1))
                 .frame(width: 10, height: 10)
@@ -388,6 +246,41 @@ private struct AvatarPlaceholderView: View {
                 .offset(x: 4, y: 4)
         }
         .frame(width: 44, height: 44)
+    }
+
+    @ViewBuilder
+    private var avatarContent: some View {
+        if let profileURL,
+           let url = URL(string: profileURL) {
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case .success(let image):
+                    image
+                        .resizable()
+                        .scaledToFill()
+                case .failure:
+                    initialsView
+                case .empty:
+                    ProgressView()
+                        .tint(Color.accentColor)
+                @unknown default:
+                    initialsView
+                }
+            }
+            .clipShape(Circle())
+        } else {
+            initialsView
+        }
+    }
+
+    private var initialsView: some View {
+        ZStack {
+            Circle()
+                .fill(Color.accentColor.opacity(0.15))
+            Text(initials.isEmpty ? "?" : initials.uppercased())
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(Color.accentColor)
+        }
     }
 }
 

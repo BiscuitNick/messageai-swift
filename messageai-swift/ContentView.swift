@@ -13,6 +13,7 @@ struct ContentView: View {
     private enum TabSelection {
         case chats
         case users
+        case profile
         case debug
     }
 
@@ -41,6 +42,12 @@ struct ContentView: View {
                             Label("Users", systemImage: "person.3")
                         }
                         .tag(TabSelection.users)
+
+                    ProfileTabView(currentUser: user)
+                        .tabItem {
+                            Label("Profile", systemImage: "person.crop.circle")
+                        }
+                        .tag(TabSelection.profile)
 
                     DebugView(currentUser: user)
                         .tabItem {
@@ -75,6 +82,7 @@ struct ContentView: View {
                     }
                     messagingService.reset()
                     authService.sceneDidEnterBackground()
+                    selectedTab = .chats
                     return
                 }
                 if !hasStartedUserListener {
@@ -85,6 +93,7 @@ struct ContentView: View {
                 messagingService.configure(modelContext: modelContext, currentUserId: newId)
                 await authService.markCurrentUserOnline()
                 authService.sceneDidBecomeActive()
+                selectedTab = .chats
             }
         }
         .onChange(of: scenePhase) { _, newPhase in

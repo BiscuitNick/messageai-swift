@@ -13,10 +13,17 @@ import UIKit
 struct ProfileView: View {
     let user: AuthService.AppUser
     let onSignOut: () -> Void
-    let onStartBotChat: () -> Void
-    let onAddMockData: () -> Void
-    let isBotBusy: Bool
-    let isMockBusy: Bool
+    let showsDismissButton: Bool
+
+    init(
+        user: AuthService.AppUser,
+        onSignOut: @escaping () -> Void,
+        showsDismissButton: Bool = true
+    ) {
+        self.user = user
+        self.onSignOut = onSignOut
+        self.showsDismissButton = showsDismissButton
+    }
 
     @Environment(AuthService.self) private var authService
     @Environment(\.dismiss) private var dismiss
@@ -68,30 +75,6 @@ struct ProfileView: View {
                     LabeledContent("User ID", value: displayedUser.id)
                 }
 
-                Section("Tools") {
-                    Button(action: onStartBotChat) {
-                        HStack {
-                            Label("Chat with Support Bot", systemImage: "person.text.rectangle")
-                            if isBotBusy {
-                                Spacer()
-                                ProgressView()
-                            }
-                        }
-                    }
-                    .disabled(isBotBusy)
-
-                    Button(action: onAddMockData) {
-                        HStack {
-                            Label("Add Mock Data", systemImage: "sparkles")
-                            if isMockBusy {
-                                Spacer()
-                                ProgressView()
-                            }
-                        }
-                    }
-                    .disabled(isMockBusy)
-                }
-
                 Section {
                     Button(role: .destructive, action: signOut) {
                         Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
@@ -103,9 +86,11 @@ struct ProfileView: View {
             .navigationTitle("Profile")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
-                        dismiss()
+                if showsDismissButton {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") {
+                            dismiss()
+                        }
                     }
                 }
             }
@@ -133,7 +118,9 @@ struct ProfileView: View {
 
     private func signOut() {
         onSignOut()
-        dismiss()
+        if showsDismissButton {
+            dismiss()
+        }
     }
 
     private func initials(for name: String) -> String {

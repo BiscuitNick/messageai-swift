@@ -1,12 +1,6 @@
-//
-//  DebugView.swift
-//  messageai-swift
-//
-//  Created by Nick Kenkel on 11/19/25.
-//
-
 import FirebaseAuth
 import FirebaseCore
+import FirebaseFunctions
 import SwiftUI
 
 struct DebugView: View {
@@ -15,14 +9,19 @@ struct DebugView: View {
     @Environment(AuthService.self) private var authService
     @Environment(NotificationService.self) private var notificationService
     @Environment(MessagingService.self) private var messagingService
+    private let functions = Functions.functions(region: "us-central1")
 
-    private var firebaseOptions: FirebaseOptions? {
-        FirebaseApp.app()?.options
-    }
-
-    private var messagingDebug: MessagingService.DebugSnapshot {
-        messagingService.debugSnapshot
-    }
+    @State private var serverTimeResult: String?
+    @State private var serverTimeError: String?
+    @State private var mockStatus: String?
+    @State private var mockError: String?
+    @State private var isMockBusy = false
+    @State private var deleteConversationsStatus: String?
+    @State private var deleteConversationsError: String?
+    @State private var isDeletingConversations = false
+    @State private var deleteUsersStatus: String?
+    @State private var deleteUsersError: String?
+    @State private var isDeletingUsers = false
 
     var body: some View {
         NavigationStack {
@@ -31,6 +30,8 @@ struct DebugView: View {
                 authSection
                 messagingSection
                 notificationSection
+                maintenanceSection
+                serverTimeSection
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Debug")
@@ -82,6 +83,147 @@ struct DebugView: View {
         }
     }
 
+    private var maintenanceSection: some View {
+        Section("Database Tools") {
+            Button {
+                Task { await triggerMockSeed() }
+            } label: {
+                if isMockBusy {
+                    ProgressView()
+                } else {
+                    Label("Seed Mock Data", systemImage: "sparkles")
+                }
+            }
+            .disabled(isMockBusy)
+
+            statusText(success: mockStatus, error: mockError)
+
+            Button(role: .destructive) {
+                Task { await deleteConversations() }
+            } label: {
+                if isDeletingConversations {
+                    ProgressView()
+                } else {
+                    Label("Delete Conversations", systemImage: "trash")
+                }
+            }
+            .disabled(isDeletingConversations)
+
+            statusText(success: deleteConversationsStatus, error: deleteConversationsError)
+
+            Button(role: .destructive) {
+                Task { await deleteUsers() }
+            } label: {
+                if isDeletingUsers {
+                    ProgressView()
+                } else {
+                    Label("Delete Users", systemImage: "person.crop.circle.badge.xmark")
+                }
+            }
+            .disabled(isDeletingUsers)
+
+            statusText(success: deleteUsersStatus, error: deleteUsersError)
+        }
+    }
+
+    private var serverTimeSection: some View {
+        Section("Cloud Functions") {
+            Button("Fetch Server Time") {
+                Task { await fetchServerTime() }
+            }
+            if let result = serverTimeResult {
+                LabeledContent("Last Result", value: result)
+            }
+            if let error = serverTimeError {
+                Text(error)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+            }
+        }
+    }
+
+    @MainActor
+    private func fetchServerTime() async {
+        serverTimeResult = nil
+        serverTimeError = nil
+        do {
+            let data = try await functions.httpsCallable("getServerTime").call([String: Any]())
+            if let dict = data.data as? [String: Any],
+               let iso = dict["iso"] as? String {
+                serverTimeResult = iso
+            } else {
+                serverTimeResult = "Received unexpected payload"
+            }
+        } catch {
+            serverTimeError = describe(error)
+        }
+    }
+
+    @MainActor
+    private func triggerMockSeed() async {
+        mockStatus = nil
+        mockError = nil
+        isMockBusy = true
+        defer { isMockBusy = false }
+        do {
+            try await functions.httpsCallable("generateMockData").call([String: Any]())
+            mockStatus = "Mock data seeded at \(Date().formatted(dateTimeFormatter))"
+        } catch {
+            mockError = describe(error)
+        }
+    }
+
+    @MainActor
+    private func deleteConversations() async {
+        deleteConversationsStatus = nil
+        deleteConversationsError = nil
+        isDeletingConversations = true
+        defer { isDeletingConversations = false }
+        do {
+            try await functions.httpsCallable("deleteConversations").call([String: Any]())
+            deleteConversationsStatus = "Conversations cleared at \(Date().formatted(dateTimeFormatter))"
+        } catch {
+            deleteConversationsError = describe(error)
+        }
+    }
+
+    @MainActor
+    private func deleteUsers() async {
+        deleteUsersStatus = nil
+        deleteUsersError = nil
+        isDeletingUsers = true
+        defer { isDeletingUsers = false }
+        do {
+            try await functions.httpsCallable("deleteUsers").call([String: Any]())
+            deleteUsersStatus = "Users cleared at \(Date().formatted(dateTimeFormatter))"
+        } catch {
+            deleteUsersError = describe(error)
+        }
+    }
+
+    private func statusText(success: String?, error: String?) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let success {
+                Text(success)
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            }
+            if let error {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
+    }
+
+    private var firebaseOptions: FirebaseOptions? {
+        FirebaseApp.app()?.options
+    }
+
+    private var messagingDebug: MessagingService.DebugSnapshot {
+        messagingService.debugSnapshot
+    }
+
     private func statusDescription(for status: UNAuthorizationStatus) -> String {
         switch status {
         case .notDetermined:
@@ -97,5 +239,25 @@ struct DebugView: View {
         @unknown default:
             return "Unknown"
         }
+    }
+
+    private var dateTimeFormatter: Date.FormatStyle {
+        .dateTime.year().month().day().hour().minute()
+    }
+
+    private func describe(_ error: Error) -> String {
+        let nsError = error as NSError
+        if nsError.domain == FunctionsErrorDomain,
+           let code = FunctionsErrorCode(rawValue: nsError.code) {
+            switch code {
+            case .unauthenticated:
+                return "Authentication required. Sign in again."
+            case .permissionDenied:
+                return "Permission denied."
+            default:
+                break
+            }
+        }
+        return error.localizedDescription
     }
 }

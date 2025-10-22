@@ -72,7 +72,8 @@ struct ChatView: View {
                                     MessageBubble(
                                         message: message,
                                         isCurrentUser: message.senderId == currentUser.id,
-                                        sender: participantLookup[message.senderId]
+                                        sender: participantLookup[message.senderId],
+                                        participants: participants
                                     )
                                     .id(message.id)
                                 }
@@ -172,25 +173,44 @@ private struct MessageBubble: View {
     let message: MessageEntity
     let isCurrentUser: Bool
     let sender: UserEntity?
+    let participants: [UserEntity]
+
+    private static let palette: [Color] = [
+        Color(red: 0.17, green: 0.33, blue: 0.82),
+        Color(red: 0.12, green: 0.55, blue: 0.35),
+        Color(red: 0.56, green: 0.17, blue: 0.68),
+        Color(red: 0.78, green: 0.20, blue: 0.20),
+        Color(red: 0.94, green: 0.49, blue: 0.12)
+    ]
 
     private var bubbleColor: Color {
-        isCurrentUser ? Color.accentColor : Color(.secondarySystemBackground)
+        guard !isCurrentUser else { return Color.accentColor }
+        let identifier = sender?.id ?? message.senderId
+        let index = abs(identifier.hashValue) % MessageBubble.palette.count
+        return MessageBubble.palette[index]
     }
 
-    private var textColor: Color {
-        isCurrentUser ? Color.white : Color.primary
+    private var textColor: Color { Color.white }
+
+    private var metaTextColor: Color {
+        Color(.secondaryLabel)
     }
 
-    private var statusText: String {
+    private var timestampColor: Color {
+        Color(.label)
+    }
+
+    private var statusIconColor: Color {
+        bubbleColor
+    }
+
+    private var statusLabel: String? {
+        guard isCurrentUser else { return nil }
         switch message.deliveryStatus {
-        case .sending:
-            return "Sending"
-        case .sent:
-            return "Sent"
-        case .delivered:
-            return "Delivered"
-        case .read:
-            return "Read"
+        case .sending: return "Sending"
+        case .sent: return "Sent"
+        case .delivered: return "Delivered"
+        case .read: return "Read"
         }
     }
 
@@ -211,21 +231,8 @@ private struct MessageBubble: View {
             }
 
             VStack(alignment: isCurrentUser ? .trailing : .leading, spacing: 4) {
-                Text(message.text)
-                    .foregroundStyle(textColor)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(bubbleColor)
-                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-
-                HStack(spacing: 6) {
-                    Text(timestampText)
-                    if isCurrentUser {
-                        DeliveryStatusIcon(status: message.deliveryStatus, isCurrentUser: true)
-                    }
-                }
-                .font(.caption2)
-                .foregroundStyle(Color.secondary)
+                bubbleContent
+                metadataRow
             }
             .frame(maxWidth: UIScreen.main.bounds.width * 0.7, alignment: isCurrentUser ? .trailing : .leading)
 
@@ -245,28 +252,137 @@ private struct MessageBubble: View {
         let initials = components.prefix(2).compactMap { $0.first }.map(String.init)
         return initials.prefix(2).joined()
     }
+    @State private var showingReadDetails = false
+
+    private var seenParticipants: [UserEntity] {
+        let readIds = Set(message.readBy).subtracting([message.senderId])
+        return participants.filter { readIds.contains($0.id) }
+            .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+    }
+
+    private var unseenParticipants: [UserEntity] {
+        let readIds = Set(message.readBy)
+        return participants.filter { $0.id != message.senderId && !readIds.contains($0.id) }
+            .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+    }
+
+    private var readCount: Int {
+        seenParticipants.count
+    }
+
+    private var readSummary: String {
+        guard readCount > 0 else { return "" }
+        return readCount == 1 ? "Read by 1" : "Read by \(readCount)"
+    }
+
+    private var bubbleContent: some View {
+        Text(message.text)
+            .foregroundStyle(textColor)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(bubbleColor)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var metadataRow: some View {
+        Button(action: { showingReadDetails.toggle() }) {
+            HStack(spacing: 6) {
+                Text(timestampText)
+                    .foregroundStyle(timestampColor)
+
+                DeliveryStatusIcon(
+                    status: message.deliveryStatus,
+                    color: statusIconColor
+                )
+
+                if let statusLabel {
+                    Text(statusLabel)
+                        .foregroundStyle(metaTextColor)
+                }
+
+                if isCurrentUser, readCount > 0 {
+                    Text(readSummary)
+                        .foregroundStyle(metaTextColor)
+                }
+            }
+            .font(.caption2)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $showingReadDetails, attachmentAnchor: .rect(.bounds), arrowEdge: isCurrentUser ? .trailing : .leading) {
+            ReadStatusPopover(
+                seenParticipants: seenParticipants,
+                unseenParticipants: unseenParticipants
+            )
+        }
+    }
 }
 
 private struct DeliveryStatusIcon: View {
     let status: DeliveryStatus
-    var isCurrentUser: Bool = false
+    var color: Color
 
     var body: some View {
-        Image(systemName: iconName)
-            .foregroundStyle(Color.secondary)
+        if let iconName {
+            Image(systemName: iconName)
+                .foregroundStyle(color)
+        }
     }
 
-    private var iconName: String {
+    private var iconName: String? {
         switch status {
-        case .sending:
-            return "clock"
-        case .sent:
-            return "checkmark"
-        case .delivered:
-            return "checkmark.circle"
-        case .read:
-            return "checkmark.circle.fill"
+        case .sending: return "clock"
+        case .sent: return "checkmark"
+        case .delivered: return "checkmark.circle"
+        case .read: return "checkmark.circle.fill"
         }
+    }
+}
+
+private struct ReadStatusPopover: View {
+    let seenParticipants: [UserEntity]
+    let unseenParticipants: [UserEntity]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if seenParticipants.isEmpty && unseenParticipants.isEmpty {
+                Text("No other participants in this conversation.")
+                    .foregroundStyle(.secondary)
+            } else {
+                if !seenParticipants.isEmpty {
+                    Group {
+                        Text("Seen by")
+                            .font(.caption.bold())
+                            .foregroundStyle(.secondary)
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(seenParticipants) { participant in
+                                Text(participant.displayName)
+                            }
+                        }
+                    }
+                }
+
+                if !unseenParticipants.isEmpty {
+                    Divider()
+
+                    Group {
+                        Text("Waiting on")
+                            .font(.caption.bold())
+                            .foregroundStyle(.secondary)
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(unseenParticipants) { participant in
+                                Text(participant.displayName)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .frame(minWidth: 220)
     }
 }
 
