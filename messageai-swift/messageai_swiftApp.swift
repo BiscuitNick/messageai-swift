@@ -18,6 +18,7 @@ struct messageai_swiftApp: App {
     @State private var firestoreService: FirestoreService
     @State private var messagingService: MessagingService
     @State private var notificationService: NotificationService
+    @State private var networkMonitor: NetworkMonitor
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
             UserEntity.self,
@@ -43,6 +44,7 @@ struct messageai_swiftApp: App {
         _authService = State(wrappedValue: AuthService())
         _messagingService = State(wrappedValue: MessagingService())
         _notificationService = State(wrappedValue: notification)
+        _networkMonitor = State(wrappedValue: NetworkMonitor())
         appDelegate.notificationService = notification
     }
 
@@ -53,6 +55,7 @@ struct messageai_swiftApp: App {
                 .environment(firestoreService)
                 .environment(messagingService)
                 .environment(notificationService)
+                .environment(networkMonitor)
         }
         .modelContainer(sharedModelContainer)
     }

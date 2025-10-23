@@ -9,6 +9,8 @@ import SwiftUI
 import SwiftData
 
 struct NewConversationSheet: View {
+    @Environment(NetworkMonitor.self) private var networkMonitor
+
     enum Mode: String, CaseIterable, Identifiable {
         case direct = "Direct"
         case group = "Group"
@@ -85,36 +87,20 @@ struct NewConversationSheet: View {
                                     toggleSelection(for: bot.id)
                                 } label: {
                                     HStack(spacing: 12) {
-                                        AsyncImage(url: URL(string: bot.avatarURL)) { phase in
-                                            switch phase {
-                                            case .success(let image):
-                                                image
-                                                    .resizable()
-                                                    .scaledToFill()
-                                                    .frame(width: 36, height: 36)
-                                                    .clipShape(Circle())
-                                            case .failure, .empty:
-                                                ZStack {
-                                                    Circle()
-                                                        .fill(Color.accentColor.opacity(0.15))
-                                                    Image(systemName: "sparkles")
-                                                        .foregroundStyle(Color.accentColor)
-                                                }
-                                                .frame(width: 36, height: 36)
-                                            @unknown default:
-                                                ZStack {
-                                                    Circle()
-                                                        .fill(Color.accentColor.opacity(0.15))
-                                                    Image(systemName: "sparkles")
-                                                        .foregroundStyle(Color.accentColor)
-                                                }
-                                                .frame(width: 36, height: 36)
-                                            }
-                                        }
+                                        AvatarView(
+                                            bot: bot,
+                                            size: 36,
+                                            showPresenceIndicator: true,
+                                            isOnline: networkMonitor.isConnected
+                                        )
 
                                         VStack(alignment: .leading, spacing: 2) {
-                                            Text(bot.name)
-                                                .foregroundStyle(.primary)
+                                            HStack(spacing: 4) {
+                                                Text(bot.name)
+                                                    .foregroundStyle(.primary)
+                                                Text("✨")
+                                                    .font(.caption)
+                                            }
                                             Text(bot.category.capitalized)
                                                 .font(.caption)
                                                 .foregroundStyle(.secondary)
@@ -171,7 +157,12 @@ struct NewConversationSheet: View {
                                     toggleSelection(for: user.id)
                                 } label: {
                                     HStack(spacing: 12) {
-                                        ParticipantAvatar(initials: initials(for: user.displayName))
+                                        AvatarView(
+                                            user: user,
+                                            size: 36,
+                                            showPresenceIndicator: true,
+                                            isOnline: networkMonitor.isConnected
+                                        )
 
                                         VStack(alignment: .leading, spacing: 2) {
                                             Text(user.displayName)
@@ -288,7 +279,7 @@ struct NewConversationSheet: View {
                     // Create NEW conversation with AI bot (always create new, never resume)
                     let participantIDs = Array(selectedParticipantIDs)
                     id = try await messagingService.createConversationWithBot(
-                        botId: participantIDs.first ?? "messageai-bot"
+                        botId: participantIDs.first ?? "dash-bot"
                     )
                 case .direct:
                     let participantIDs = Array(selectedParticipantIDs)
@@ -319,12 +310,10 @@ struct NewConversationSheet: View {
         let isSelected = selectedParticipantIDs.contains(userId)
         let symbol: String
         switch mode {
-        case .direct:
+        case .direct, .aiChat:
             symbol = isSelected ? "largecircle.fill.circle" : "circle"
         case .group:
             symbol = isSelected ? "checkmark.circle.fill" : "circle"
-        case .aiChat:
-            symbol = "circle"
         }
         return Image(systemName: symbol)
             .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
@@ -335,20 +324,5 @@ struct NewConversationSheet: View {
         let components = name.split(separator: " ")
         let initials = components.prefix(2).compactMap { $0.first }.map(String.init)
         return initials.prefix(2).joined()
-    }
-}
-
-private struct ParticipantAvatar: View {
-    let initials: String
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .fill(Color.accentColor.opacity(0.15))
-            Text(initials.isEmpty ? "?" : initials.uppercased())
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(Color.accentColor)
-        }
-        .frame(width: 36, height: 36)
     }
 }

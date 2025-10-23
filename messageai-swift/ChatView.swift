@@ -18,6 +18,7 @@ struct ChatView: View {
     @Environment(AuthService.self) private var authService
     @Environment(NotificationService.self) private var notificationService
     @Environment(FirestoreService.self) private var firestoreService
+    @Environment(NetworkMonitor.self) private var networkMonitor
 
     @State private var messageText: String = ""
     @State private var sendError: String?
@@ -96,7 +97,8 @@ struct ChatView: View {
                                         conversation: conversation,
                                         sender: senderForMessage(message),
                                         bot: botForMessage(message),
-                                        participants: participants
+                                        participants: participants,
+                                        isOnline: networkMonitor.isConnected
                                     )
                                     .id(message.id)
                                 }
@@ -107,7 +109,7 @@ struct ChatView: View {
                         }
 
                         if isBotTyping {
-                            TypingIndicator(bot: activeBot)
+                            TypingIndicator(bot: activeBot, isOnline: networkMonitor.isConnected)
                                 .id("typing-indicator")
                         }
 
@@ -198,9 +200,15 @@ struct ChatView: View {
             return conversation.groupName ?? "Group Chat"
         }
         let others = participantIds.filter { $0 != currentUser.id }
-        if let first = others.first,
-           let user = participants.first(where: { $0.id == first }) {
-            return user.displayName
+        if let first = others.first {
+            // Check if it's a bot
+            if first.hasPrefix("bot:") {
+                if let bot = bots.first(where: { "bot:\($0.id)" == first }) {
+                    return "\(bot.name) ✨"
+                }
+            } else if let user = participants.first(where: { $0.id == first }) {
+                return user.displayName
+            }
         }
         return "Conversation"
     }
@@ -284,6 +292,7 @@ private struct MessageBubble: View {
     let sender: UserEntity?
     let bot: BotEntity?
     let participants: [UserEntity]
+    let isOnline: Bool
     @State private var showingReceiptDetails = false
 
     private var displayName: String {
@@ -460,11 +469,28 @@ private struct MessageBubble: View {
             if isCurrentUser { Spacer(minLength: 40) }
 
             if !isCurrentUser {
-                AvatarView(
-                    initials: senderInitials,
-                    profileURL: avatarURL,
-                    status: presenceStatus
-                )
+                if let bot {
+                    AvatarView(
+                        bot: bot,
+                        size: 32,
+                        showPresenceIndicator: true,
+                        isOnline: isOnline
+                    )
+                } else if let sender {
+                    AvatarView(
+                        user: sender,
+                        size: 32,
+                        showPresenceIndicator: true,
+                        isOnline: isOnline
+                    )
+                } else {
+                    AvatarView(
+                        entity: .custom(initials: senderInitials, profileURL: avatarURL),
+                        size: 32,
+                        showPresenceIndicator: true,
+                        isOnline: isOnline
+                    )
+                }
             }
 
             VStack(alignment: isCurrentUser ? .trailing : .leading, spacing: 4) {
@@ -630,69 +656,6 @@ private struct ReadStatusPopover: View {
     }
 }
 
-private struct AvatarView: View {
-    let initials: String
-    let profileURL: String?
-    let status: PresenceStatus
-
-    private var isEmoji: Bool {
-        guard let profileURL else { return false }
-        // Check if it's a single emoji character (not a URL)
-        return profileURL.count <= 2 && !profileURL.contains("http") && !profileURL.contains(".")
-    }
-
-    var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            ZStack {
-                Circle()
-                    .fill(Color.accentColor.opacity(0.2))
-
-                if let profileURL, isEmoji {
-                    // Render emoji directly
-                    Text(profileURL)
-                        .font(.title2)
-                } else if let profileURL,
-                          let url = URL(string: profileURL) {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .scaledToFill()
-                        case .failure:
-                            initialsView
-                        case .empty:
-                            ProgressView()
-                                .tint(Color.accentColor)
-                        @unknown default:
-                            initialsView
-                        }
-                    }
-                    .clipShape(Circle())
-                } else {
-                    initialsView
-                }
-            }
-            .frame(width: 32, height: 32)
-
-            Circle()
-                .fill(status.indicatorColor.opacity(status == .offline ? 0.4 : 1))
-                .frame(width: 10, height: 10)
-                .overlay(
-                    Circle()
-                        .stroke(Color(.systemBackground), lineWidth: 1)
-                )
-                .offset(x: 3, y: 3)
-        }
-    }
-
-    private var initialsView: some View {
-        Text(initials.isEmpty ? "?" : initials.uppercased())
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(Color.accentColor)
-    }
-}
-
 private struct DateHeader: View {
     let date: Date
     private let formatter: DateFormatter = {
@@ -715,14 +678,16 @@ private struct DateHeader: View {
 
 private struct TypingIndicator: View {
     let bot: BotEntity?
+    let isOnline: Bool
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
             if let bot {
                 AvatarView(
-                    initials: initials(for: bot.name),
-                    profileURL: bot.avatarURL,
-                    status: .online
+                    bot: bot,
+                    size: 32,
+                    showPresenceIndicator: true,
+                    isOnline: isOnline
                 )
             }
 
@@ -754,12 +719,6 @@ private struct TypingIndicator: View {
     }
 
     @State private var animationScale: CGFloat = 0.8
-
-    private func initials(for name: String) -> String {
-        let components = name.split(separator: " ")
-        let initials = components.prefix(2).compactMap { $0.first }.map(String.init)
-        return initials.prefix(2).joined()
-    }
 }
 
 private struct ComposerView: View {

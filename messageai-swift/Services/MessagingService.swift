@@ -30,7 +30,7 @@ final class MessagingService {
 
     private var modelContext: ModelContext?
     private var currentUserId: String?
-    private let botUserId = "messageai-bot"
+    private let botUserId = "dash-bot"  // Legacy bot user ID
     private var notificationService: NotificationService?
     private var isAppInForeground: Bool = true
 
@@ -158,7 +158,7 @@ final class MessagingService {
         let now = Date()
         let participantIds = [currentUserId, prefixedBotId]
 
-        let welcomeText = "Hi! I'm your AI assistant. I can help you with answering questions, drafting messages, providing recommendations, and more. What can I help you with today?"
+        let welcomeText = welcomeMessage(for: botId)
 
         var data: [String: Any] = [
             "participantIds": participantIds,
@@ -169,7 +169,7 @@ final class MessagingService {
             "lastMessage": welcomeText,
             "lastMessageTimestamp": Timestamp(date: now),
             "lastSenderId": prefixedBotId,
-            "unreadCount": [currentUserId: 1, prefixedBotId: 0],
+            "unreadCount": [currentUserId: 0, prefixedBotId: 0],
             "lastInteractionByUser": [
                 currentUserId: Timestamp(date: now),
                 prefixedBotId: Timestamp(date: now)
@@ -189,7 +189,7 @@ final class MessagingService {
             lastMessage: welcomeText,
             lastMessageTimestamp: now,
             lastSenderId: prefixedBotId,
-            unreadCount: [currentUserId: 1, prefixedBotId: 0],
+            unreadCount: [currentUserId: 0, prefixedBotId: 0],
             lastInteractionByUser: [currentUserId: now, prefixedBotId: now],
             createdAt: now,
             updatedAt: now
@@ -351,7 +351,7 @@ final class MessagingService {
         let botRef = db.collection("users").document(botUserId)
         try await botRef.setData([
             "email": "bot@messageai.app",
-            "displayName": "AI Assistant",
+            "displayName": "Dash Bot",
             "profilePictureURL": "https://dpj39bucz99gb.cloudfront.net/n8qq1sycd9rg80ct1zbrfw5k58",
             "isOnline": true,
             "lastSeen": Timestamp(date: now),
@@ -363,9 +363,9 @@ final class MessagingService {
         let conversationRef = db.collection("conversations").document(conversationId)
         var conversationDoc = try await conversationRef.getDocument()
 
-        let welcomeText = "Hi! I'm your AI assistant. I can help you with answering questions, drafting messages, providing recommendations, and more. What can I help you with today?"
+        let welcomeText = welcomeMessage(for: botUserId)
         let participantIds = [currentUserId, botUserId]
-        let unreadCount = [currentUserId: 1, botUserId: 0]
+        let unreadCount = [currentUserId: 0, botUserId: 0]
 
         if !conversationDoc.exists {
             try await conversationRef.setData([
@@ -415,7 +415,7 @@ final class MessagingService {
         try upsertLocalUser(
             id: botUserId,
             email: "bot@messageai.app",
-            displayName: "AI Assistant",
+            displayName: "Dash Bot",
             profilePictureURL: "https://dpj39bucz99gb.cloudfront.net/n8qq1sycd9rg80ct1zbrfw5k58",
             isOnline: true,
             lastSeen: now,
@@ -821,7 +821,8 @@ final class MessagingService {
                     return
                 }
 
-                Task { @MainActor in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
                     await self.handleConversationSnapshot(snapshot)
                 }
             }
@@ -847,7 +848,8 @@ final class MessagingService {
                     return
                 }
 
-                Task { @MainActor in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
                     await self.handleMessageSnapshot(conversationId: conversationId, snapshot: snapshot)
                 }
             }
@@ -1307,6 +1309,17 @@ final class MessagingService {
         }
 
         return nil
+    }
+
+    private func welcomeMessage(for botId: String) -> String {
+        switch botId {
+        case "dash-bot":
+            return "Hey there! I'm Dash Bot, your quick and helpful assistant. Need help with questions, drafting messages, recommendations, or just a good conversation? I'm here for it. What can I do for you?"
+        case "dad-bot":
+            return "Well hello there! I'm Dad Bot. Whether you need a dad joke to brighten your day or some good ol' fatherly advice, I've got you covered. What's on your mind, kiddo?"
+        default:
+            return "Hi! I'm here to help. What can I do for you today?"
+        }
     }
 
     private func debugLog(_ message: String) {

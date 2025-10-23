@@ -13,6 +13,7 @@ struct UsersDebugView: View {
     let currentUser: AuthService.AppUser
 
     @Query private var users: [UserEntity]
+    @Environment(NetworkMonitor.self) private var networkMonitor
 
     var body: some View {
         NavigationStack {
@@ -20,7 +21,8 @@ struct UsersDebugView: View {
                 ForEach(sortedUsers) { user in
                     UserRowView(
                         user: user,
-                        isCurrentUser: user.id == currentUser.id
+                        isCurrentUser: user.id == currentUser.id,
+                        isOnline: networkMonitor.isConnected
                     )
                 }
             }
@@ -44,6 +46,7 @@ struct UsersDebugView: View {
 private struct UserRowView: View {
     let user: UserEntity
     let isCurrentUser: Bool
+    let isOnline: Bool
 
     private var statusText: String {
         let status = user.presenceStatus
@@ -63,7 +66,12 @@ private struct UserRowView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            presenceDot
+            AvatarView(
+                user: user,
+                size: 44,
+                showPresenceIndicator: true,
+                isOnline: isOnline
+            )
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
@@ -94,11 +102,5 @@ private struct UserRowView: View {
             }
         }
         .padding(.vertical, 6)
-    }
-
-    private var presenceDot: some View {
-        Circle()
-            .fill(user.presenceStatus.indicatorColor.opacity(user.presenceStatus == .offline ? 0.4 : 1))
-            .frame(width: 12, height: 12)
     }
 }

@@ -20,6 +20,7 @@ final class FirestoreService {
     }
 
     private let db: Firestore
+    private let functions: Functions
     @ObservationIgnored private var usersListener: ListenerRegistration?
     @ObservationIgnored private var userModelContext: ModelContext?
     @ObservationIgnored private var botsListener: ListenerRegistration?
@@ -31,6 +32,7 @@ final class FirestoreService {
         settings.isPersistenceEnabled = true
         firestore.settings = settings
         self.db = firestore
+        self.functions = Functions.functions(region: "us-central1")
     }
 
     func upsertUser(_ user: AuthService.AppUser) async throws {
@@ -88,7 +90,8 @@ final class FirestoreService {
                     self.debugLog("User listener error: \(error.localizedDescription)")
                     return
                 }
-                Task { @MainActor in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
                     await self.handleUserSnapshot(snapshot, modelContext: modelContext)
                 }
             }
@@ -114,7 +117,8 @@ final class FirestoreService {
                     self.debugLog("Bot listener error: \(error.localizedDescription)")
                     return
                 }
-                Task { @MainActor in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
                     await self.handleBotSnapshot(snapshot, modelContext: modelContext)
                 }
             }
@@ -321,31 +325,14 @@ final class FirestoreService {
     }
 
     func ensureBotExists() async throws {
-        let botId = "messageai-bot"
-        let botRef = db.collection("bots").document(botId)
+        debugLog("Creating bots via Firebase Function...")
+        _ = try await functions.httpsCallable("createBots").call()
+        debugLog("Bots created successfully")
+    }
 
-        debugLog("Checking if bot '\(botId)' exists in Firestore...")
-        let snapshot = try await botRef.getDocument()
-
-        if !snapshot.exists {
-            debugLog("Bot '\(botId)' does not exist, creating...")
-            let data: [String: Any] = [
-                "name": "AI Assistant",
-                "description": "I can help you with answering questions, drafting messages, providing recommendations, and more. What can I help you with today?",
-                "avatarURL": "https://dpj39bucz99gb.cloudfront.net/n8qq1sycd9rg80ct1zbrfw5k58",
-                "category": "general",
-                "capabilities": ["conversation", "question-answering", "recommendations", "drafting"],
-                "model": "gemini-1.5-flash",
-                "systemPrompt": "You are a helpful AI assistant. Be concise, friendly, and accurate.",
-                "tools": [],
-                "isActive": true,
-                "createdAt": FieldValue.serverTimestamp(),
-                "updatedAt": FieldValue.serverTimestamp()
-            ]
-            try await botRef.setData(data)
-            debugLog("Bot '\(botId)' created successfully")
-        } else {
-            debugLog("Bot '\(botId)' already exists")
-        }
+    func deleteBots() async throws {
+        debugLog("Deleting bots via Firebase Function...")
+        _ = try await functions.httpsCallable("deleteBots").call()
+        debugLog("Bots deleted successfully")
     }
 }
