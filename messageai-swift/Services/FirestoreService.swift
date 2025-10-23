@@ -22,6 +22,8 @@ final class FirestoreService {
     private let db: Firestore
     @ObservationIgnored private var usersListener: ListenerRegistration?
     @ObservationIgnored private var userModelContext: ModelContext?
+    @ObservationIgnored private var botsListener: ListenerRegistration?
+    @ObservationIgnored private var botModelContext: ModelContext?
 
     init() {
         let firestore = Firestore.firestore()
@@ -98,6 +100,32 @@ final class FirestoreService {
         userModelContext = nil
     }
 
+    func startBotListener(modelContext: ModelContext) {
+        if botModelContext !== modelContext {
+            botModelContext = modelContext
+        }
+
+        botsListener?.remove()
+        botsListener = db.collection("bots")
+            .whereField("isActive", isEqualTo: true)
+            .addSnapshotListener { [weak self] snapshot, error in
+                guard let self else { return }
+                if let error {
+                    self.debugLog("Bot listener error: \(error.localizedDescription)")
+                    return
+                }
+                Task { @MainActor in
+                    await self.handleBotSnapshot(snapshot, modelContext: modelContext)
+                }
+            }
+    }
+
+    func stopBotListener() {
+        botsListener?.remove()
+        botsListener = nil
+        botModelContext = nil
+    }
+
     private func handleUserSnapshot(_ snapshot: QuerySnapshot?, modelContext: ModelContext) async {
         guard let snapshot else { return }
 
@@ -150,6 +178,87 @@ final class FirestoreService {
             try modelContext.save()
         } catch {
             debugLog("Failed to persist users: \(error.localizedDescription)")
+        }
+    }
+
+    private func handleBotSnapshot(_ snapshot: QuerySnapshot?, modelContext: ModelContext) async {
+        guard let snapshot else {
+            debugLog("Bot snapshot is nil")
+            return
+        }
+
+        debugLog("Bot snapshot received with \(snapshot.documentChanges.count) changes")
+
+        for change in snapshot.documentChanges {
+            let data = change.document.data()
+            let botId = change.document.documentID
+
+            debugLog("Bot change type: \(change.type.rawValue) for botId: \(botId)")
+
+            var descriptor = FetchDescriptor<BotEntity>(
+                predicate: #Predicate<BotEntity> { bot in
+                    bot.id == botId
+                }
+            )
+            descriptor.fetchLimit = 1
+
+            let name = data["name"] as? String ?? "AI Assistant"
+            let description = data["description"] as? String ?? ""
+            let avatarURL = data["avatarURL"] as? String ?? ""
+            let category = data["category"] as? String ?? "general"
+            let capabilities = data["capabilities"] as? [String] ?? []
+            let model = data["model"] as? String ?? "gemini-1.5-flash"
+            let systemPrompt = data["systemPrompt"] as? String ?? ""
+            let tools = data["tools"] as? [String] ?? []
+            let isActive = data["isActive"] as? Bool ?? true
+            let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
+            let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
+
+            switch change.type {
+            case .added, .modified:
+                if let existing = try? modelContext.fetch(descriptor).first {
+                    debugLog("Updating existing bot: \(botId)")
+                    existing.name = name
+                    existing.botDescription = description
+                    existing.avatarURL = avatarURL
+                    existing.category = category
+                    existing.capabilities = capabilities
+                    existing.model = model
+                    existing.systemPrompt = systemPrompt
+                    existing.tools = tools
+                    existing.isActive = isActive
+                    existing.updatedAt = updatedAt
+                } else {
+                    debugLog("Creating new bot: \(botId) with name: \(name)")
+                    let newBot = BotEntity(
+                        id: botId,
+                        name: name,
+                        description: description,
+                        avatarURL: avatarURL,
+                        category: category,
+                        capabilities: capabilities,
+                        model: model,
+                        systemPrompt: systemPrompt,
+                        tools: tools,
+                        isActive: isActive,
+                        createdAt: createdAt,
+                        updatedAt: updatedAt
+                    )
+                    modelContext.insert(newBot)
+                }
+            case .removed:
+                debugLog("Removing bot: \(botId)")
+                if let existing = try? modelContext.fetch(descriptor).first {
+                    modelContext.delete(existing)
+                }
+            }
+        }
+
+        do {
+            try modelContext.save()
+            debugLog("Bots persisted successfully")
+        } catch {
+            debugLog("Failed to persist bots: \(error.localizedDescription)")
         }
     }
 
@@ -211,22 +320,32 @@ final class FirestoreService {
         }
     }
 
-    func ensureBotUserExists() async throws {
-        let botUserId = "messageai-bot"
-        let userRef = db.collection("users").document(botUserId)
-        let snapshot = try await userRef.getDocument()
+    func ensureBotExists() async throws {
+        let botId = "messageai-bot"
+        let botRef = db.collection("bots").document(botId)
+
+        debugLog("Checking if bot '\(botId)' exists in Firestore...")
+        let snapshot = try await botRef.getDocument()
 
         if !snapshot.exists {
+            debugLog("Bot '\(botId)' does not exist, creating...")
             let data: [String: Any] = [
-                "email": "bot@messageai.app",
-                "displayName": "AI Assistant",
-                "profilePictureURL": "https://dpj39bucz99gb.cloudfront.net/n8qq1sycd9rg80ct1zbrfw5k58",
-                "isOnline": true,
-                "lastSeen": Timestamp(date: Date()),
+                "name": "AI Assistant",
+                "description": "I can help you with answering questions, drafting messages, providing recommendations, and more. What can I help you with today?",
+                "avatarURL": "https://dpj39bucz99gb.cloudfront.net/n8qq1sycd9rg80ct1zbrfw5k58",
+                "category": "general",
+                "capabilities": ["conversation", "question-answering", "recommendations", "drafting"],
+                "model": "gemini-1.5-flash",
+                "systemPrompt": "You are a helpful AI assistant. Be concise, friendly, and accurate.",
+                "tools": [],
+                "isActive": true,
                 "createdAt": FieldValue.serverTimestamp(),
                 "updatedAt": FieldValue.serverTimestamp()
             ]
-            try await userRef.setData(data)
+            try await botRef.setData(data)
+            debugLog("Bot '\(botId)' created successfully")
+        } else {
+            debugLog("Bot '\(botId)' already exists")
         }
     }
 }

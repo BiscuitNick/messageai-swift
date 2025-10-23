@@ -2,6 +2,7 @@ import FirebaseAuth
 import FirebaseCore
 import FirebaseFunctions
 import SwiftUI
+import SwiftData
 
 struct DebugView: View {
     let currentUser: AuthService.AppUser
@@ -9,7 +10,10 @@ struct DebugView: View {
     @Environment(AuthService.self) private var authService
     @Environment(NotificationService.self) private var notificationService
     @Environment(MessagingService.self) private var messagingService
+    @Environment(FirestoreService.self) private var firestoreService
     private let functions = Functions.functions(region: "us-central1")
+
+    @Query private var bots: [BotEntity]
 
     @State private var serverTimeResult: String?
     @State private var serverTimeError: String?
@@ -28,6 +32,7 @@ struct DebugView: View {
             List {
                 firebaseSection
                 authSection
+                botsSection
                 messagingSection
                 notificationSection
                 maintenanceSection
@@ -35,6 +40,49 @@ struct DebugView: View {
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Debug")
+        }
+    }
+
+    private var botsSection: some View {
+        Section("AI Bots") {
+            LabeledContent("Bots in SwiftData", value: "\(bots.count)")
+
+            if bots.isEmpty {
+                Text("No bots found")
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+            } else {
+                ForEach(bots) { bot in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(bot.name)
+                            .font(.headline)
+                        Text("ID: \(bot.id)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text("Category: \(bot.category)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text("Active: \(bot.isActive ? "Yes" : "No")")
+                            .font(.caption)
+                            .foregroundStyle(bot.isActive ? .green : .red)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+
+            Button("Recreate Bot in Firestore") {
+                Task { await recreateBot() }
+            }
+        }
+    }
+
+    @MainActor
+    private func recreateBot() async {
+        do {
+            try await firestoreService.ensureBotExists()
+            print("✅ Bot recreation attempted")
+        } catch {
+            print("❌ Failed to recreate bot: \(error.localizedDescription)")
         }
     }
 

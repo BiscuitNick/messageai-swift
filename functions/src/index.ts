@@ -361,43 +361,68 @@ export const chatWithAgent = onCall<AgentRequest>(async (request) => {
   }
 
   try {
-    // Generate response with full conversation history for context
+    // Get conversation to find which bot is being used
+    const conversationRef = firestore.collection(COLLECTION_CONVERSATIONS).doc(conversationId);
+    const conversationDoc = await conversationRef.get();
+    const conversationData = conversationDoc.data();
+
+    if (!conversationData) {
+      throw new HttpsError("not-found", "Conversation not found");
+    }
+
+    // Find the bot participant (format: "bot:botId")
+    const botParticipant = conversationData.participantIds.find((id: string) =>
+      id.startsWith("bot:")
+    );
+
+    if (!botParticipant) {
+      throw new HttpsError("invalid-argument", "No bot found in conversation");
+    }
+
+    // Extract bot ID from "bot:botId" format
+    const botId = botParticipant.replace("bot:", "");
+
+    // Get bot configuration from bots collection
+    const botDoc = await firestore.collection("bots").doc(botId).get();
+    const botData = botDoc.data();
+
+    if (!botData) {
+      throw new HttpsError("not-found", "Bot configuration not found");
+    }
+
+    // Generate response with bot's system prompt and configuration
     const result = await assistantAgent.generate({
       messages: messages.map((msg) => ({
         role: msg.role,
         content: msg.content,
       })),
+      system: botData.systemPrompt || "You are a helpful AI assistant.",
     });
 
-    const botUserId = "messageai-bot";
     const responseText = result.text;
     const timestamp = admin.firestore.Timestamp.now();
 
-    // Write bot response directly to Firestore
-    const conversationRef = firestore.collection(COLLECTION_CONVERSATIONS).doc(conversationId);
+    // Write bot response directly to Firestore with prefixed bot ID
     const messageId = firestore.collection("_").doc().id;
     const messageRef = conversationRef.collection(SUBCOLLECTION_MESSAGES).doc(messageId);
 
     await messageRef.set({
       conversationId,
-      senderId: botUserId,
+      senderId: botParticipant, // Use full "bot:botId" format
       text: responseText,
       timestamp,
       deliveryStatus: DELIVERY_SENT,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    // Get current conversation to update lastInteractionByUser
-    const conversationDoc = await conversationRef.get();
-    const conversationData = conversationDoc.data();
-    const lastInteractionByUser = conversationData?.lastInteractionByUser || {};
-    lastInteractionByUser[botUserId] = timestamp;
-
     // Update conversation metadata
+    const lastInteractionByUser = conversationData.lastInteractionByUser || {};
+    lastInteractionByUser[botParticipant] = timestamp;
+
     await conversationRef.set({
       lastMessage: responseText,
       lastMessageTimestamp: timestamp,
-      lastSenderId: botUserId,
+      lastSenderId: botParticipant,
       lastInteractionByUser,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });

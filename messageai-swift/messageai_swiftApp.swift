@@ -21,6 +21,7 @@ struct messageai_swiftApp: App {
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
             UserEntity.self,
+            BotEntity.self,
             ConversationEntity.self,
             MessageEntity.self,
         ])

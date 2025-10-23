@@ -26,14 +26,27 @@ struct ChatView: View {
     @FocusState private var composerFocused: Bool
 
     private var isAIConversation: Bool {
-        conversation.participantIds.contains("messageai-bot")
+        conversation.participantIds.contains { $0.hasPrefix("bot:") }
+    }
+
+    private var activeBot: BotEntity? {
+        guard let botParticipantId = conversation.participantIds.first(where: { $0.hasPrefix("bot:") }) else {
+            return nil
+        }
+        let botId = String(botParticipantId.dropFirst(4)) // Remove "bot:" prefix
+        return botLookup[botId]
     }
 
     @Query private var participants: [UserEntity]
+    @Query private var bots: [BotEntity]
     @Query private var messages: [MessageEntity]
 
     private var participantLookup: [String: UserEntity] {
         Dictionary(uniqueKeysWithValues: participants.map { ($0.id, $0) })
+    }
+
+    private var botLookup: [String: BotEntity] {
+        Dictionary(uniqueKeysWithValues: bots.map { ($0.id, $0) })
     }
 
     private var groupedMessages: [(date: Date, items: [MessageEntity])] {
@@ -81,7 +94,8 @@ struct ChatView: View {
                                         isCurrentUser: message.senderId == currentUser.id,
                                         currentUserId: currentUser.id,
                                         conversation: conversation,
-                                        sender: participantLookup[message.senderId],
+                                        sender: senderForMessage(message),
+                                        bot: botForMessage(message),
                                         participants: participants
                                     )
                                     .id(message.id)
@@ -93,7 +107,7 @@ struct ChatView: View {
                         }
 
                         if isBotTyping {
-                            TypingIndicator(botUser: participantLookup["messageai-bot"])
+                            TypingIndicator(bot: activeBot)
                                 .id("typing-indicator")
                         }
 
@@ -245,6 +259,21 @@ struct ChatView: View {
             proxy.scrollTo(lastMessage.id, anchor: .bottom)
         }
     }
+
+    private func senderForMessage(_ message: MessageEntity) -> UserEntity? {
+        if message.senderId.hasPrefix("bot:") {
+            return nil
+        }
+        return participantLookup[message.senderId]
+    }
+
+    private func botForMessage(_ message: MessageEntity) -> BotEntity? {
+        if message.senderId.hasPrefix("bot:") {
+            let botId = String(message.senderId.dropFirst(4)) // Remove "bot:" prefix
+            return botLookup[botId]
+        }
+        return nil
+    }
 }
 
 private struct MessageBubble: View {
@@ -253,8 +282,27 @@ private struct MessageBubble: View {
     let currentUserId: String
     let conversation: ConversationEntity
     let sender: UserEntity?
+    let bot: BotEntity?
     let participants: [UserEntity]
     @State private var showingReceiptDetails = false
+
+    private var displayName: String {
+        if let bot {
+            return bot.name
+        }
+        return sender?.displayName ?? "Unknown"
+    }
+
+    private var avatarURL: String? {
+        if let bot {
+            return bot.avatarURL
+        }
+        return sender?.profilePictureURL
+    }
+
+    private var presenceStatus: PresenceStatus {
+        sender?.presenceStatus ?? .offline
+    }
 
     private static let palette: [Color] = [
         Color(red: 0.17, green: 0.33, blue: 0.82),  // Blue
@@ -414,8 +462,8 @@ private struct MessageBubble: View {
             if !isCurrentUser {
                 AvatarView(
                     initials: senderInitials,
-                    profileURL: sender?.profilePictureURL,
-                    status: sender?.presenceStatus ?? .offline
+                    profileURL: avatarURL,
+                    status: presenceStatus
                 )
             }
 
@@ -436,8 +484,7 @@ private struct MessageBubble: View {
     }
 
     private var senderInitials: String {
-        guard let name = sender?.displayName else { return "?" }
-        return initials(from: name)
+        return initials(from: displayName)
     }
 
     private var bubbleContent: some View {
@@ -667,14 +714,14 @@ private struct DateHeader: View {
 }
 
 private struct TypingIndicator: View {
-    let botUser: UserEntity?
+    let bot: BotEntity?
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            if let botUser {
+            if let bot {
                 AvatarView(
-                    initials: initials(for: botUser.displayName),
-                    profileURL: botUser.profilePictureURL,
+                    initials: initials(for: bot.name),
+                    profileURL: bot.avatarURL,
                     status: .online
                 )
             }

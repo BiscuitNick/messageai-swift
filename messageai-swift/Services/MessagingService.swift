@@ -151,10 +151,12 @@ final class MessagingService {
         guard let modelContext else { throw MessagingError.dataUnavailable }
 
         // ALWAYS create a new conversation with bots, never resume existing
+        // Use bot: prefix for bot participant IDs
+        let prefixedBotId = "bot:\(botId)"
         let conversationRef = db.collection("conversations").document()
         let conversationId = conversationRef.documentID
         let now = Date()
-        let participantIds = [currentUserId, botId]
+        let participantIds = [currentUserId, prefixedBotId]
 
         let welcomeText = "Hi! I'm your AI assistant. I can help you with answering questions, drafting messages, providing recommendations, and more. What can I help you with today?"
 
@@ -166,11 +168,11 @@ final class MessagingService {
             "updatedAt": FieldValue.serverTimestamp(),
             "lastMessage": welcomeText,
             "lastMessageTimestamp": Timestamp(date: now),
-            "lastSenderId": botId,
-            "unreadCount": [currentUserId: 1, botId: 0],
+            "lastSenderId": prefixedBotId,
+            "unreadCount": [currentUserId: 1, prefixedBotId: 0],
             "lastInteractionByUser": [
                 currentUserId: Timestamp(date: now),
-                botId: Timestamp(date: now)
+                prefixedBotId: Timestamp(date: now)
             ]
         ]
 
@@ -186,9 +188,9 @@ final class MessagingService {
             adminIds: [currentUserId],
             lastMessage: welcomeText,
             lastMessageTimestamp: now,
-            lastSenderId: botId,
-            unreadCount: [currentUserId: 1, botId: 0],
-            lastInteractionByUser: [currentUserId: now, botId: now],
+            lastSenderId: prefixedBotId,
+            unreadCount: [currentUserId: 1, prefixedBotId: 0],
+            lastInteractionByUser: [currentUserId: now, prefixedBotId: now],
             createdAt: now,
             updatedAt: now
         )
@@ -200,7 +202,7 @@ final class MessagingService {
         let messageRef = conversationRef.collection("messages").document(welcomeMessageId)
         try await messageRef.setData([
             "conversationId": conversationId,
-            "senderId": botId,
+            "senderId": prefixedBotId,
             "text": welcomeText,
             "timestamp": Timestamp(date: now),
             "deliveryStatus": DeliveryStatus.delivered.rawValue,
@@ -211,11 +213,11 @@ final class MessagingService {
         let welcomeMessage = MessageEntity(
             id: welcomeMessageId,
             conversationId: conversationId,
-            senderId: botId,
+            senderId: prefixedBotId,
             text: welcomeText,
             timestamp: now,
             deliveryStatus: .delivered,
-            readReceipts: [botId: now],
+            readReceipts: [prefixedBotId: now],
             updatedAt: now
         )
         modelContext.insert(welcomeMessage)

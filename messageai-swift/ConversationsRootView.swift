@@ -16,6 +16,7 @@ struct ConversationsRootView: View {
     private var conversations: [ConversationEntity]
 
     @Query private var users: [UserEntity]
+    @Query private var bots: [BotEntity]
 
     @State private var isComposePresented = false
     @State private var selectedConversationID: String?
@@ -57,7 +58,8 @@ struct ConversationsRootView: View {
                                 ConversationRow(
                                     conversation: conversation,
                                     currentUser: currentUser,
-                                    users: users
+                                    users: users,
+                                    bots: bots
                                 )
                             }
                         }
@@ -94,12 +96,22 @@ struct ConversationsRootView: View {
         if conversation.isGroup {
             return conversation.groupName ?? "Group Chat"
         }
-        let lookup = Dictionary(uniqueKeysWithValues: users.map { ($0.id, $0) })
+        let userLookup = Dictionary(uniqueKeysWithValues: users.map { ($0.id, $0) })
+        let botLookup = Dictionary(uniqueKeysWithValues: bots.map { ($0.id, $0) })
         let otherParticipant = conversation.participantIds.first { $0 != currentUser.id }
-        if let otherParticipant,
-           let user = lookup[otherParticipant] {
+
+        guard let otherParticipant else { return "Conversation" }
+
+        // Check if it's a bot (format: "bot:botId")
+        if otherParticipant.hasPrefix("bot:") {
+            let botId = String(otherParticipant.dropFirst(4))
+            if let bot = botLookup[botId] {
+                return bot.name
+            }
+        } else if let user = userLookup[otherParticipant] {
             return user.displayName
         }
+
         return "Conversation"
     }
 
@@ -115,9 +127,14 @@ private struct ConversationRow: View {
     let conversation: ConversationEntity
     let currentUser: AuthService.AppUser
     let users: [UserEntity]
+    let bots: [BotEntity]
 
     private var userLookup: [String: UserEntity] {
         Dictionary(uniqueKeysWithValues: users.map { ($0.id, $0) })
+    }
+
+    private var botLookup: [String: BotEntity] {
+        Dictionary(uniqueKeysWithValues: bots.map { ($0.id, $0) })
     }
 
     private var title: String {
@@ -128,8 +145,15 @@ private struct ConversationRow: View {
         let otherParticipant = conversation.participantIds
             .first(where: { $0 != currentUser.id })
 
-        if let otherParticipant,
-           let user = userLookup[otherParticipant] {
+        guard let otherParticipant else { return "Conversation" }
+
+        // Check if it's a bot (format: "bot:botId")
+        if otherParticipant.hasPrefix("bot:") {
+            let botId = String(otherParticipant.dropFirst(4))
+            if let bot = botLookup[botId] {
+                return bot.name
+            }
+        } else if let user = userLookup[otherParticipant] {
             return user.displayName
         }
 
@@ -220,12 +244,21 @@ private struct ConversationRow: View {
     private var avatarProfileURL: String? {
         guard !conversation.isGroup else { return nil }
         let otherParticipant = conversation.participantIds.first { $0 != currentUser.id }
-        if let otherParticipant,
-           let user = userLookup[otherParticipant],
-           let url = user.profilePictureURL,
-           !url.isEmpty {
+
+        guard let otherParticipant else { return nil }
+
+        // Check if it's a bot (format: "bot:botId")
+        if otherParticipant.hasPrefix("bot:") {
+            let botId = String(otherParticipant.dropFirst(4))
+            if let bot = botLookup[botId], !bot.avatarURL.isEmpty {
+                return bot.avatarURL
+            }
+        } else if let user = userLookup[otherParticipant],
+                  let url = user.profilePictureURL,
+                  !url.isEmpty {
             return url
         }
+
         return nil
     }
 }

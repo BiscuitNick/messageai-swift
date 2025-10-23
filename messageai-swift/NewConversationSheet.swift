@@ -39,6 +39,8 @@ struct NewConversationSheet: View {
     @State private var errorMessage: String?
     @State private var searchText: String = ""
 
+    @Query(filter: #Predicate<BotEntity> { $0.isActive }) private var bots: [BotEntity]
+
     init(
         currentUser: AuthService.AppUser,
         availableUsers: [UserEntity],
@@ -74,60 +76,81 @@ struct NewConversationSheet: View {
 
                 if mode == .aiChat {
                     Section(header: Text("Available AI Agents")) {
-                        Button {
-                            toggleSelection(for: "messageai-bot")
-                        } label: {
-                            HStack(spacing: 12) {
-                                AsyncImage(url: URL(string: "https://dpj39bucz99gb.cloudfront.net/n8qq1sycd9rg80ct1zbrfw5k58")) { phase in
-                                    switch phase {
-                                    case .success(let image):
-                                        image
-                                            .resizable()
-                                            .scaledToFill()
-                                            .frame(width: 36, height: 36)
-                                            .clipShape(Circle())
-                                    case .failure, .empty:
-                                        ZStack {
-                                            Circle()
-                                                .fill(Color.accentColor.opacity(0.15))
-                                            Image(systemName: "sparkles")
-                                                .foregroundStyle(Color.accentColor)
+                        if bots.isEmpty {
+                            Text("No AI agents available")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(bots) { bot in
+                                Button {
+                                    toggleSelection(for: bot.id)
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        AsyncImage(url: URL(string: bot.avatarURL)) { phase in
+                                            switch phase {
+                                            case .success(let image):
+                                                image
+                                                    .resizable()
+                                                    .scaledToFill()
+                                                    .frame(width: 36, height: 36)
+                                                    .clipShape(Circle())
+                                            case .failure, .empty:
+                                                ZStack {
+                                                    Circle()
+                                                        .fill(Color.accentColor.opacity(0.15))
+                                                    Image(systemName: "sparkles")
+                                                        .foregroundStyle(Color.accentColor)
+                                                }
+                                                .frame(width: 36, height: 36)
+                                            @unknown default:
+                                                ZStack {
+                                                    Circle()
+                                                        .fill(Color.accentColor.opacity(0.15))
+                                                    Image(systemName: "sparkles")
+                                                        .foregroundStyle(Color.accentColor)
+                                                }
+                                                .frame(width: 36, height: 36)
+                                            }
                                         }
-                                        .frame(width: 36, height: 36)
-                                    @unknown default:
-                                        ZStack {
-                                            Circle()
-                                                .fill(Color.accentColor.opacity(0.15))
-                                            Image(systemName: "sparkles")
-                                                .foregroundStyle(Color.accentColor)
+
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(bot.name)
+                                                .foregroundStyle(.primary)
+                                            Text(bot.category.capitalized)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
                                         }
-                                        .frame(width: 36, height: 36)
+
+                                        Spacer()
+
+                                        selectionIndicator(for: bot.id)
                                     }
                                 }
+                                .disabled(isCreating)
 
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("AI Assistant")
-                                        .foregroundStyle(.primary)
-                                    Text("General purpose assistant")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                if selectedParticipantIDs.contains(bot.id) {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Text(bot.botDescription)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                            .padding(.horizontal, 48)
+
+                                        if !bot.capabilities.isEmpty {
+                                            HStack(spacing: 6) {
+                                                ForEach(bot.capabilities.prefix(3), id: \.self) { capability in
+                                                    Text(capability)
+                                                        .font(.caption2)
+                                                        .padding(.horizontal, 8)
+                                                        .padding(.vertical, 4)
+                                                        .background(Color.accentColor.opacity(0.1))
+                                                        .clipShape(Capsule())
+                                                }
+                                            }
+                                            .padding(.horizontal, 48)
+                                        }
+                                    }
+                                    .padding(.vertical, 4)
                                 }
-
-                                Spacer()
-
-                                selectionIndicator(for: "messageai-bot")
                             }
-                        }
-                        .disabled(isCreating)
-
-                        if selectedParticipantIDs.contains("messageai-bot") {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("I can help you with answering questions, drafting messages, providing recommendations, and more.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .padding(.horizontal, 48)
-                            }
-                            .padding(.vertical, 4)
                         }
                     }
                 } else {
