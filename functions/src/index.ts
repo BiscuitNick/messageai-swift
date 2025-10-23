@@ -338,46 +338,74 @@ type AgentMessage = {
 
 type AgentRequest = {
   messages: AgentMessage[];
-  prompt?: string;
+  conversationId: string;
 };
 
 export const chatWithAgent = onCall<AgentRequest>(async (request) => {
-  requireAuth(request);
+  const uid = requireAuth(request);
 
-  const { messages = [], prompt } = request.data;
+  const { messages = [], conversationId } = request.data;
 
-  if (!prompt && messages.length === 0) {
+  if (messages.length === 0) {
     throw new HttpsError(
       "invalid-argument",
-      "Either 'prompt' or 'messages' must be provided"
+      "messages array is required"
+    );
+  }
+
+  if (!conversationId) {
+    throw new HttpsError(
+      "invalid-argument",
+      "conversationId is required"
     );
   }
 
   try {
-    let result;
+    // Generate response with full conversation history for context
+    const result = await assistantAgent.generate({
+      messages: messages.map((msg) => ({
+        role: msg.role,
+        content: msg.content,
+      })),
+    });
 
-    if (prompt) {
-      result = await assistantAgent.generate({
-        prompt: prompt,
-      });
+    const botUserId = "messageai-bot";
+    const responseText = result.text;
+    const timestamp = admin.firestore.Timestamp.now();
 
-      return {
-        response: result.text,
-        usage: result.usage,
-      };
-    } else {
-      result = await assistantAgent.generate({
-        messages: messages.map((msg) => ({
-          role: msg.role,
-          content: msg.content,
-        })),
-      });
+    // Write bot response directly to Firestore
+    const conversationRef = firestore.collection(COLLECTION_CONVERSATIONS).doc(conversationId);
+    const messageId = firestore.collection("_").doc().id;
+    const messageRef = conversationRef.collection(SUBCOLLECTION_MESSAGES).doc(messageId);
 
-      return {
-        response: result.text,
-        usage: result.usage,
-      };
-    }
+    await messageRef.set({
+      conversationId,
+      senderId: botUserId,
+      text: responseText,
+      timestamp,
+      deliveryStatus: DELIVERY_SENT,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    // Get current conversation to update lastInteractionByUser
+    const conversationDoc = await conversationRef.get();
+    const conversationData = conversationDoc.data();
+    const lastInteractionByUser = conversationData?.lastInteractionByUser || {};
+    lastInteractionByUser[botUserId] = timestamp;
+
+    // Update conversation metadata
+    await conversationRef.set({
+      lastMessage: responseText,
+      lastMessageTimestamp: timestamp,
+      lastSenderId: botUserId,
+      lastInteractionByUser,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    return {
+      response: responseText,
+      usage: result.usage,
+    };
   } catch (error) {
     console.error("Agent error:", error);
     throw new HttpsError(

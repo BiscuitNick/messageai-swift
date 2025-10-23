@@ -26,13 +26,13 @@ final class MessagingService {
     private var conversationListener: ListenerRegistration?
     private var messageListeners: [String: ListenerRegistration] = [:]
     private var pendingMessageTasks: [String: Task<Void, Never>] = [:]
+    private var messageListenerStartTimes: [String: Date] = [:]
 
     private var modelContext: ModelContext?
     private var currentUserId: String?
     private let botUserId = "messageai-bot"
     private var notificationService: NotificationService?
     private var isAppInForeground: Bool = true
-    private var notifiedMessageIds: Set<String> = []
 
     init(db: Firestore = Firestore.firestore()) {
         self.db = db
@@ -54,9 +54,9 @@ final class MessagingService {
         conversationListener = nil
         messageListeners.values.forEach { $0.remove() }
         messageListeners.removeAll()
+        messageListenerStartTimes.removeAll()
         pendingMessageTasks.values.forEach { $0.cancel() }
         pendingMessageTasks.removeAll()
-        notifiedMessageIds.removeAll()
         currentUserId = nil
     }
 
@@ -140,6 +140,86 @@ final class MessagingService {
             modelContext.insert(conversationEntity)
             try modelContext.save()
         }
+
+        observeMessages(for: conversationId)
+
+        return conversationId
+    }
+
+    func createConversationWithBot(botId: String) async throws -> String {
+        guard let currentUserId else { throw MessagingError.notAuthenticated }
+        guard let modelContext else { throw MessagingError.dataUnavailable }
+
+        // ALWAYS create a new conversation with bots, never resume existing
+        let conversationRef = db.collection("conversations").document()
+        let conversationId = conversationRef.documentID
+        let now = Date()
+        let participantIds = [currentUserId, botId]
+
+        let welcomeText = "Hi! I'm your AI assistant. I can help you with answering questions, drafting messages, providing recommendations, and more. What can I help you with today?"
+
+        var data: [String: Any] = [
+            "participantIds": participantIds,
+            "isGroup": false,
+            "adminIds": [currentUserId],
+            "createdAt": FieldValue.serverTimestamp(),
+            "updatedAt": FieldValue.serverTimestamp(),
+            "lastMessage": welcomeText,
+            "lastMessageTimestamp": Timestamp(date: now),
+            "lastSenderId": botId,
+            "unreadCount": [currentUserId: 1, botId: 0],
+            "lastInteractionByUser": [
+                currentUserId: Timestamp(date: now),
+                botId: Timestamp(date: now)
+            ]
+        ]
+
+        try await conversationRef.setData(data)
+
+        // Create local conversation
+        let conversationEntity = ConversationEntity(
+            id: conversationId,
+            participantIds: participantIds,
+            isGroup: false,
+            groupName: nil,
+            groupPictureURL: nil,
+            adminIds: [currentUserId],
+            lastMessage: welcomeText,
+            lastMessageTimestamp: now,
+            lastSenderId: botId,
+            unreadCount: [currentUserId: 1, botId: 0],
+            lastInteractionByUser: [currentUserId: now, botId: now],
+            createdAt: now,
+            updatedAt: now
+        )
+        modelContext.insert(conversationEntity)
+        try modelContext.save()
+
+        // Create welcome message
+        let welcomeMessageId = "welcome-\(conversationId)"
+        let messageRef = conversationRef.collection("messages").document(welcomeMessageId)
+        try await messageRef.setData([
+            "conversationId": conversationId,
+            "senderId": botId,
+            "text": welcomeText,
+            "timestamp": Timestamp(date: now),
+            "deliveryStatus": DeliveryStatus.delivered.rawValue,
+            "updatedAt": FieldValue.serverTimestamp()
+        ])
+
+        // Create local welcome message
+        let welcomeMessage = MessageEntity(
+            id: welcomeMessageId,
+            conversationId: conversationId,
+            senderId: botId,
+            text: welcomeText,
+            timestamp: now,
+            deliveryStatus: .delivered,
+            readReceipts: [botId: now],
+            updatedAt: now
+        )
+        modelContext.insert(welcomeMessage)
+        try modelContext.save()
 
         observeMessages(for: conversationId)
 
@@ -269,7 +349,8 @@ final class MessagingService {
         let botRef = db.collection("users").document(botUserId)
         try await botRef.setData([
             "email": "bot@messageai.app",
-            "displayName": "MessageAI Bot",
+            "displayName": "AI Assistant",
+            "profilePictureURL": "https://dpj39bucz99gb.cloudfront.net/n8qq1sycd9rg80ct1zbrfw5k58",
             "isOnline": true,
             "lastSeen": Timestamp(date: now),
             "updatedAt": FieldValue.serverTimestamp(),
@@ -280,7 +361,7 @@ final class MessagingService {
         let conversationRef = db.collection("conversations").document(conversationId)
         var conversationDoc = try await conversationRef.getDocument()
 
-        let welcomeText = "Hi! I'm your MessageAI bot. Ask me anything to get started."
+        let welcomeText = "Hi! I'm your AI assistant. I can help you with answering questions, drafting messages, providing recommendations, and more. What can I help you with today?"
         let participantIds = [currentUserId, botUserId]
         let unreadCount = [currentUserId: 1, botUserId: 0]
 
@@ -332,8 +413,8 @@ final class MessagingService {
         try upsertLocalUser(
             id: botUserId,
             email: "bot@messageai.app",
-            displayName: "MessageAI Bot",
-            profilePictureURL: nil,
+            displayName: "AI Assistant",
+            profilePictureURL: "https://dpj39bucz99gb.cloudfront.net/n8qq1sycd9rg80ct1zbrfw5k58",
             isOnline: true,
             lastSeen: now,
             createdAt: createdAt
@@ -618,6 +699,21 @@ final class MessagingService {
         let timestamp = Date()
         let messageId = UUID().uuidString
 
+        // Create optimistic local message for immediate UI update
+        let optimisticMessage = MessageEntity(
+            id: messageId,
+            conversationId: conversationId,
+            senderId: botUserId,
+            text: trimmed,
+            timestamp: timestamp,
+            deliveryStatus: .sent,
+            readReceipts: [botUserId: timestamp],
+            updatedAt: timestamp
+        )
+
+        modelContext.insert(optimisticMessage)
+        try? modelContext.save()
+
         let conversationRef = db.collection("conversations").document(conversationId)
         let messageRef = conversationRef.collection("messages").document(messageId)
 
@@ -650,6 +746,9 @@ final class MessagingService {
                 "lastInteractionByUser": firestoreInteractionMap,
                 "updatedAt": FieldValue.serverTimestamp()
             ], merge: true)
+
+            // Update local conversation
+            await updateLocalSenderInteraction(conversationId: conversationId, userId: botUserId, timestamp: timestamp, lastMessage: trimmed)
         } catch {
             debugLog("Failed to send bot message: \(error.localizedDescription)")
             throw error
@@ -730,6 +829,9 @@ final class MessagingService {
         if let existing = messageListeners[conversationId] {
             existing.remove()
         }
+
+        // Record when this listener starts - only notify for messages after this time
+        messageListenerStartTimes[conversationId] = Date()
 
         let listener = db.collection("conversations")
             .document(conversationId)
@@ -826,6 +928,7 @@ final class MessagingService {
                 if let listener = messageListeners[conversationId] {
                     listener.remove()
                     messageListeners.removeValue(forKey: conversationId)
+                    messageListenerStartTimes.removeValue(forKey: conversationId)
                 }
             }
         }
@@ -907,6 +1010,9 @@ final class MessagingService {
         }
 
         // Handle notifications for new messages
+        // Only notify for messages that arrived after the listener was established
+        let listenerStartTime = messageListenerStartTimes[conversationId] ?? .distantPast
+
         for change in snapshot.documentChanges {
             let data = change.document.data()
             let messageId = change.document.documentID
@@ -916,12 +1022,15 @@ final class MessagingService {
                 let text = data["text"] as? String,
                 let currentUserId,
                 change.type == .added,
-                senderId != currentUserId,
-                !notifiedMessageIds.contains(messageId) // Prevent duplicate notifications
+                senderId != currentUserId
             else { continue }
 
-            // Mark this message as notified
-            notifiedMessageIds.insert(messageId)
+            // Get message timestamp
+            let timestamp = (data["timestamp"] as? Timestamp)?.dateValue() ?? Date()
+
+            // Only notify if message arrived after listener was established
+            // This prevents duplicate notifications on app restart
+            guard timestamp > listenerStartTime else { continue }
 
             // Trigger notification for new message
             if let notificationService {

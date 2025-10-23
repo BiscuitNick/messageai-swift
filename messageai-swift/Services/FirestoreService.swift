@@ -14,6 +14,11 @@ import FirebaseFunctions
 @MainActor
 @Observable
 final class FirestoreService {
+    struct AgentMessage {
+        let role: String
+        let content: String
+    }
+
     private let db: Firestore
     @ObservationIgnored private var usersListener: ListenerRegistration?
     @ObservationIgnored private var userModelContext: ModelContext?
@@ -181,19 +186,26 @@ final class FirestoreService {
         try await messageRef.setData(update, merge: true)
     }
 
-    func chatWithAgent(prompt: String) async throws -> String {
+    func chatWithAgent(messages: [AgentMessage], conversationId: String) async throws {
         let functions = Functions.functions(region: "us-central1")
-        let data: [String: Any] = ["prompt": prompt]
+
+        // Convert messages to format expected by Firebase function
+        let messagesData = messages.map { message in
+            return [
+                "role": message.role,
+                "content": message.content
+            ]
+        }
+
+        let data: [String: Any] = [
+            "messages": messagesData,
+            "conversationId": conversationId
+        ]
 
         do {
-            let result = try await functions.httpsCallable("chatWithAgent").call(data)
-            guard let resultData = result.data as? [String: Any],
-                  let response = resultData["response"] as? String else {
-                throw NSError(domain: "FirestoreService", code: -1, userInfo: [
-                    NSLocalizedDescriptionKey: "Invalid response from chatWithAgent"
-                ])
-            }
-            return response
+            _ = try await functions.httpsCallable("chatWithAgent").call(data)
+            // Bot response is written directly to Firestore by the function
+            // The listener will pick it up automatically
         } catch {
             throw error
         }
@@ -208,6 +220,7 @@ final class FirestoreService {
             let data: [String: Any] = [
                 "email": "bot@messageai.app",
                 "displayName": "AI Assistant",
+                "profilePictureURL": "https://dpj39bucz99gb.cloudfront.net/n8qq1sycd9rg80ct1zbrfw5k58",
                 "isOnline": true,
                 "lastSeen": Timestamp(date: Date()),
                 "createdAt": FieldValue.serverTimestamp(),

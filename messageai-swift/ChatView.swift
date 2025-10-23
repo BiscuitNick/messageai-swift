@@ -22,6 +22,7 @@ struct ChatView: View {
     @State private var messageText: String = ""
     @State private var sendError: String?
     @State private var isSending: Bool = false
+    @State private var isBotTyping: Bool = false
     @FocusState private var composerFocused: Bool
 
     private var isAIConversation: Bool {
@@ -90,6 +91,12 @@ struct ChatView: View {
                                     .padding(.vertical, 4)
                             }
                         }
+
+                        if isBotTyping {
+                            TypingIndicator(botUser: participantLookup["messageai-bot"])
+                                .id("typing-indicator")
+                        }
+
                         Spacer().frame(height: 8)
                     }
                     .padding(.vertical, 12)
@@ -110,12 +117,27 @@ struct ChatView: View {
                         }
                     }
                 )
-                .onChange(of: messages.count) { _, _ in
+                .onChange(of: messages.count) { oldCount, newCount in
                     withAnimation(.easeOut(duration: 0.25)) {
                         scrollToBottom(proxy: proxy)
                     }
+
+                    // Turn off typing indicator when bot message arrives
+                    if isAIConversation && isBotTyping && newCount > oldCount {
+                        if let lastMessage = messages.last, lastMessage.senderId == "messageai-bot" {
+                            isBotTyping = false
+                        }
+                    }
+
                     Task {
                         await messagingService.markConversationAsRead(conversationId)
+                    }
+                }
+                .onChange(of: isBotTyping) { _, isTyping in
+                    if isTyping {
+                        withAnimation(.easeOut(duration: 0.25)) {
+                            scrollToBottom(proxy: proxy)
+                        }
                     }
                 }
                 .task {
@@ -183,24 +205,28 @@ struct ChatView: View {
                 try await messagingService.sendMessage(conversationId: conversationId, text: content)
                 messageText = ""
 
-                // If this is an AI conversation, get AI response
+                // If this is an AI conversation, call the agent
+                // The agent will write its response directly to Firestore
                 if isAIConversation {
+                    // Show typing indicator
+                    isBotTyping = true
+
                     do {
-                        let aiResponse = try await firestoreService.chatWithAgent(prompt: content)
-                        // Send AI response as message from bot
-                        try await messagingService.sendMessageAsBot(
-                            conversationId: conversationId,
-                            text: aiResponse,
-                            botUserId: "messageai-bot"
+                        // Pass full conversation history for context
+                        let conversationHistory = messages.map { message in
+                            FirestoreService.AgentMessage(
+                                role: message.senderId == currentUser.id ? "user" : "assistant",
+                                content: message.text
+                            )
+                        }
+                        try await firestoreService.chatWithAgent(
+                            messages: conversationHistory,
+                            conversationId: conversationId
                         )
                     } catch {
-                        // If AI fails, send error message as bot
-                        let errorMsg = "Sorry, I encountered an error: \(error.localizedDescription)"
-                        try? await messagingService.sendMessageAsBot(
-                            conversationId: conversationId,
-                            text: errorMsg,
-                            botUserId: "messageai-bot"
-                        )
+                        // If AI fails, hide typing indicator and log the error
+                        isBotTyping = false
+                        print("AI error: \(error.localizedDescription)")
                     }
                 }
             } catch {
@@ -213,7 +239,9 @@ struct ChatView: View {
     }
 
     private func scrollToBottom(proxy: ScrollViewProxy) {
-        if let lastMessage = messages.last {
+        if isBotTyping {
+            proxy.scrollTo("typing-indicator", anchor: .bottom)
+        } else if let lastMessage = messages.last {
             proxy.scrollTo(lastMessage.id, anchor: .bottom)
         }
     }
@@ -560,14 +588,24 @@ private struct AvatarView: View {
     let profileURL: String?
     let status: PresenceStatus
 
+    private var isEmoji: Bool {
+        guard let profileURL else { return false }
+        // Check if it's a single emoji character (not a URL)
+        return profileURL.count <= 2 && !profileURL.contains("http") && !profileURL.contains(".")
+    }
+
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             ZStack {
                 Circle()
                     .fill(Color.accentColor.opacity(0.2))
 
-                if let profileURL,
-                   let url = URL(string: profileURL) {
+                if let profileURL, isEmoji {
+                    // Render emoji directly
+                    Text(profileURL)
+                        .font(.title2)
+                } else if let profileURL,
+                          let url = URL(string: profileURL) {
                     AsyncImage(url: url) { phase in
                         switch phase {
                         case .success(let image):
@@ -625,6 +663,55 @@ private struct DateHeader: View {
             .background(Color.primary.opacity(0.1))
             .clipShape(Capsule())
             .frame(maxWidth: .infinity)
+    }
+}
+
+private struct TypingIndicator: View {
+    let botUser: UserEntity?
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            if let botUser {
+                AvatarView(
+                    initials: initials(for: botUser.displayName),
+                    profileURL: botUser.profilePictureURL,
+                    status: .online
+                )
+            }
+
+            HStack(spacing: 4) {
+                ForEach(0..<3) { index in
+                    Circle()
+                        .fill(Color.gray.opacity(0.5))
+                        .frame(width: 8, height: 8)
+                        .scaleEffect(animationScale)
+                        .animation(
+                            Animation.easeInOut(duration: 0.6)
+                                .repeatForever()
+                                .delay(Double(index) * 0.2),
+                            value: animationScale
+                        )
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color(.systemGray5))
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+
+            Spacer()
+        }
+        .padding(.leading, 8)
+        .onAppear {
+            animationScale = 1.2
+        }
+    }
+
+    @State private var animationScale: CGFloat = 0.8
+
+    private func initials(for name: String) -> String {
+        let components = name.split(separator: " ")
+        let initials = components.prefix(2).compactMap { $0.first }.map(String.init)
+        return initials.prefix(2).joined()
     }
 }
 

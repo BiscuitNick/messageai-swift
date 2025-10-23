@@ -73,29 +73,61 @@ struct NewConversationSheet: View {
                 }
 
                 if mode == .aiChat {
-                    Section {
-                        VStack(alignment: .leading, spacing: 12) {
+                    Section(header: Text("Available AI Agents")) {
+                        Button {
+                            toggleSelection(for: "messageai-bot")
+                        } label: {
                             HStack(spacing: 12) {
-                                Image(systemName: "sparkles")
-                                    .font(.title2)
-                                    .foregroundStyle(.blue)
-                                    .frame(width: 36, height: 36)
-                                    .background(Color.blue.opacity(0.15))
-                                    .clipShape(Circle())
+                                AsyncImage(url: URL(string: "https://dpj39bucz99gb.cloudfront.net/n8qq1sycd9rg80ct1zbrfw5k58")) { phase in
+                                    switch phase {
+                                    case .success(let image):
+                                        image
+                                            .resizable()
+                                            .scaledToFill()
+                                            .frame(width: 36, height: 36)
+                                            .clipShape(Circle())
+                                    case .failure, .empty:
+                                        ZStack {
+                                            Circle()
+                                                .fill(Color.accentColor.opacity(0.15))
+                                            Image(systemName: "sparkles")
+                                                .foregroundStyle(Color.accentColor)
+                                        }
+                                        .frame(width: 36, height: 36)
+                                    @unknown default:
+                                        ZStack {
+                                            Circle()
+                                                .fill(Color.accentColor.opacity(0.15))
+                                            Image(systemName: "sparkles")
+                                                .foregroundStyle(Color.accentColor)
+                                        }
+                                        .frame(width: 36, height: 36)
+                                    }
+                                }
 
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text("AI Assistant")
-                                        .font(.headline)
-                                    Text("Ask me anything!")
+                                        .foregroundStyle(.primary)
+                                    Text("General purpose assistant")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
+
+                                Spacer()
+
+                                selectionIndicator(for: "messageai-bot")
+                            }
+                        }
+                        .disabled(isCreating)
+
+                        if selectedParticipantIDs.contains("messageai-bot") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("I can help you with answering questions, drafting messages, providing recommendations, and more.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 48)
                             }
                             .padding(.vertical, 4)
-
-                            Text("I can help you with various tasks including answering questions, providing recommendations, drafting messages, and more.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
                         }
                     }
                 } else {
@@ -199,13 +231,13 @@ struct NewConversationSheet: View {
             let trimmed = groupName.trimmingCharacters(in: .whitespacesAndNewlines)
             return selectedParticipantIDs.count >= 2 && !trimmed.isEmpty
         case .aiChat:
-            return true
+            return selectedParticipantIDs.count == 1
         }
     }
 
     private func toggleSelection(for userId: String) {
         switch mode {
-        case .direct:
+        case .direct, .aiChat:
             if selectedParticipantIDs.contains(userId) {
                 selectedParticipantIDs.removeAll()
             } else {
@@ -217,9 +249,6 @@ struct NewConversationSheet: View {
             } else {
                 selectedParticipantIDs.insert(userId)
             }
-        case .aiChat:
-            // No selection needed for AI chat
-            break
         }
     }
 
@@ -233,11 +262,10 @@ struct NewConversationSheet: View {
 
                 switch mode {
                 case .aiChat:
-                    // Create conversation with AI bot
-                    id = try await messagingService.createConversation(
-                        with: ["messageai-bot"],
-                        isGroup: false,
-                        groupName: nil
+                    // Create NEW conversation with AI bot (always create new, never resume)
+                    let participantIDs = Array(selectedParticipantIDs)
+                    id = try await messagingService.createConversationWithBot(
+                        botId: participantIDs.first ?? "messageai-bot"
                     )
                 case .direct:
                     let participantIDs = Array(selectedParticipantIDs)

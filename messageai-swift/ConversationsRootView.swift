@@ -21,10 +21,6 @@ struct ConversationsRootView: View {
     @State private var selectedConversationID: String?
     @State private var searchText: String = ""
 
-    private var userLookup: [String: UserEntity] {
-        Dictionary(uniqueKeysWithValues: users.map { ($0.id, $0) })
-    }
-
     private var selectableUsers: [UserEntity] {
         users.filter { $0.id != currentUser.id }
     }
@@ -61,12 +57,13 @@ struct ConversationsRootView: View {
                                 ConversationRow(
                                     conversation: conversation,
                                     currentUser: currentUser,
-                                    userLookup: userLookup
+                                    users: users
                                 )
                             }
                         }
                     }
                     .listStyle(.insetGrouped)
+                    .id(users.count) // Force refresh when users change
                 }
             }
             .navigationTitle("Chats")
@@ -97,9 +94,10 @@ struct ConversationsRootView: View {
         if conversation.isGroup {
             return conversation.groupName ?? "Group Chat"
         }
+        let lookup = Dictionary(uniqueKeysWithValues: users.map { ($0.id, $0) })
         let otherParticipant = conversation.participantIds.first { $0 != currentUser.id }
         if let otherParticipant,
-           let user = userLookup[otherParticipant] {
+           let user = lookup[otherParticipant] {
             return user.displayName
         }
         return "Conversation"
@@ -116,7 +114,11 @@ struct ConversationsRootView: View {
 private struct ConversationRow: View {
     let conversation: ConversationEntity
     let currentUser: AuthService.AppUser
-    let userLookup: [String: UserEntity]
+    let users: [UserEntity]
+
+    private var userLookup: [String: UserEntity] {
+        Dictionary(uniqueKeysWithValues: users.map { ($0.id, $0) })
+    }
 
     private var title: String {
         if conversation.isGroup {
@@ -248,10 +250,24 @@ private struct AvatarPlaceholderView: View {
         .frame(width: 44, height: 44)
     }
 
+    private var isEmoji: Bool {
+        guard let profileURL else { return false }
+        // Check if it's a single emoji character (not a URL)
+        return profileURL.count <= 2 && !profileURL.contains("http") && !profileURL.contains(".")
+    }
+
     @ViewBuilder
     private var avatarContent: some View {
-        if let profileURL,
-           let url = URL(string: profileURL) {
+        if let profileURL, isEmoji {
+            // Render emoji directly
+            ZStack {
+                Circle()
+                    .fill(Color.accentColor.opacity(0.15))
+                Text(profileURL)
+                    .font(.title)
+            }
+        } else if let profileURL,
+                  let url = URL(string: profileURL) {
             AsyncImage(url: url) { phase in
                 switch phase {
                 case .success(let image):

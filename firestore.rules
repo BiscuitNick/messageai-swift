@@ -45,15 +45,19 @@ service cloud.firestore {
           && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
 
         allow create: if isAuthenticated()
-          && request.resource.data.senderId == request.auth.uid
+          && (request.resource.data.senderId == request.auth.uid
+              || request.resource.data.senderId == 'messageai-bot')
           && request.resource.data.conversationId == conversationId
           && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
 
         allow update: if isAuthenticated()
           && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data)
-          && request.resource.data.keys().hasOnly([
-                'deliveryStatus', 'readBy', 'updatedAt'
+          && (request.resource.data.keys().hasOnly([
+                'deliveryStatus', 'readBy', 'readReceipts', 'updatedAt'
              ])
+             || request.resource.data.keys().hasOnly([
+                'deliveryStatus', 'updatedAt'
+             ]))
           && request.resource.data.senderId == resource.data.senderId
           && request.resource.data.conversationId == resource.data.conversationId;
 
