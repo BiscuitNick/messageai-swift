@@ -138,7 +138,7 @@ struct ChatView: View {
 
                     // Turn off typing indicator when bot message arrives
                     if isAIConversation && isBotTyping && newCount > oldCount {
-                        if let lastMessage = messages.last, lastMessage.senderId == "messageai-bot" {
+                        if let lastMessage = messages.last, lastMessage.senderId.hasPrefix("bot:") {
                             isBotTyping = false
                         }
                     }
