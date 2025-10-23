@@ -67,7 +67,7 @@ struct ContentView: View {
             await notificationService.requestAuthorization()
             await notificationService.registerForRemoteNotifications()
             if let userId = authService.currentUser?.id {
-                messagingService.configure(modelContext: modelContext, currentUserId: userId)
+                messagingService.configure(modelContext: modelContext, currentUserId: userId, notificationService: notificationService)
             }
             await authService.markCurrentUserOnline()
             authService.sceneDidBecomeActive()
@@ -90,7 +90,7 @@ struct ContentView: View {
                     hasStartedUserListener = true
                 }
                 await notificationService.registerForRemoteNotifications()
-                messagingService.configure(modelContext: modelContext, currentUserId: newId)
+                messagingService.configure(modelContext: modelContext, currentUserId: newId, notificationService: notificationService)
                 await authService.markCurrentUserOnline()
                 authService.sceneDidBecomeActive()
                 selectedTab = .chats
@@ -100,8 +100,10 @@ struct ContentView: View {
             Task {
                 switch newPhase {
                 case .active:
+                    messagingService.setAppInForeground(true)
                     authService.sceneDidBecomeActive()
                 case .background:
+                    messagingService.setAppInForeground(false)
                     authService.sceneDidEnterBackground()
                 default:
                     break

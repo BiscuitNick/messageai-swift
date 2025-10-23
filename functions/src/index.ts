@@ -2,6 +2,7 @@ import * as admin from "firebase-admin";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 import type { CallableRequest } from "firebase-functions/v2/https";
 import { setGlobalOptions } from "firebase-functions/v2/options";
+import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { Experimental_Agent as Agent } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { tool } from "ai";
@@ -386,3 +387,127 @@ export const chatWithAgent = onCall<AgentRequest>(async (request) => {
     );
   }
 });
+
+// Push Notification Trigger
+// Sends FCM push notifications when a new message is created
+export const sendMessageNotification = onDocumentCreated(
+  "conversations/{conversationId}/messages/{messageId}",
+  async (event) => {
+    const messageData = event.data?.data();
+    if (!messageData) {
+      console.log("No message data found");
+      return;
+    }
+
+    const conversationId = event.params.conversationId;
+    const senderId = messageData.senderId as string;
+    const messageText = messageData.text as string;
+
+    console.log(`New message in conversation ${conversationId} from ${senderId}`);
+
+    try {
+      // Fetch conversation to get participants
+      const conversationDoc = await firestore
+        .collection(COLLECTION_CONVERSATIONS)
+        .doc(conversationId)
+        .get();
+
+      if (!conversationDoc.exists) {
+        console.log(`Conversation ${conversationId} not found`);
+        return;
+      }
+
+      const conversationData = conversationDoc.data();
+      const participantIds = conversationData?.participantIds as string[] || [];
+
+      // Get recipients (exclude sender)
+      const recipientIds = participantIds.filter((id) => id !== senderId);
+
+      if (recipientIds.length === 0) {
+        console.log("No recipients to notify");
+        return;
+      }
+
+      // Fetch sender info
+      const senderDoc = await firestore
+        .collection(COLLECTION_USERS)
+        .doc(senderId)
+        .get();
+
+      const senderName = senderDoc.exists
+        ? (senderDoc.data()?.displayName as string || "Unknown")
+        : "Unknown";
+
+      // Fetch FCM tokens for all recipients
+      const tokenPromises = recipientIds.map(async (recipientId) => {
+        const userDoc = await firestore
+          .collection(COLLECTION_USERS)
+          .doc(recipientId)
+          .get();
+
+        if (!userDoc.exists) {
+          return null;
+        }
+
+        const userData = userDoc.data();
+        const fcmToken = userData?.fcmToken as string | undefined;
+
+        if (!fcmToken) {
+          console.log(`No FCM token for user ${recipientId}`);
+          return null;
+        }
+
+        return { recipientId, fcmToken };
+      });
+
+      const tokenResults = await Promise.all(tokenPromises);
+      const validTokens = tokenResults.filter(
+        (result): result is { recipientId: string; fcmToken: string } =>
+          result !== null
+      );
+
+      if (validTokens.length === 0) {
+        console.log("No valid FCM tokens found for recipients");
+        return;
+      }
+
+      // Send notifications to all recipients
+      const notificationPromises = validTokens.map(async ({ fcmToken }) => {
+        const message: admin.messaging.Message = {
+          token: fcmToken,
+          notification: {
+            title: senderName,
+            body: messageText.length > 100
+              ? messageText.substring(0, 100) + "..."
+              : messageText,
+          },
+          data: {
+            conversationId: conversationId,
+            senderId: senderId,
+            type: "new_message",
+          },
+          apns: {
+            payload: {
+              aps: {
+                sound: "default",
+                badge: 1,
+              },
+            },
+          },
+        };
+
+        try {
+          await admin.messaging().send(message);
+          console.log(`Notification sent successfully to FCM token`);
+        } catch (error) {
+          console.error("Error sending notification:", error);
+        }
+      });
+
+      await Promise.all(notificationPromises);
+      console.log(`Sent ${notificationPromises.length} notifications`);
+    } catch (error) {
+      console.error("Error in sendMessageNotification:", error);
+    }
+  }
+);

@@ -30,15 +30,22 @@ final class MessagingService {
     private var modelContext: ModelContext?
     private var currentUserId: String?
     private let botUserId = "messageai-bot"
+    private var notificationService: NotificationService?
+    private var isAppInForeground: Bool = true
 
     init(db: Firestore = Firestore.firestore()) {
         self.db = db
     }
 
-    func configure(modelContext: ModelContext, currentUserId: String) {
+    func configure(modelContext: ModelContext, currentUserId: String, notificationService: NotificationService? = nil) {
         self.modelContext = modelContext
         self.currentUserId = currentUserId
+        self.notificationService = notificationService
         observeConversations(for: currentUserId)
+    }
+
+    func setAppInForeground(_ isInForeground: Bool) {
+        self.isAppInForeground = isInForeground
     }
 
     func reset() {
@@ -849,6 +856,34 @@ final class MessagingService {
             debugLog("Failed to save messages: \(error.localizedDescription)")
         }
 
+        // Handle notifications for new messages
+        for change in snapshot.documentChanges {
+            let data = change.document.data()
+            guard
+                let senderId = data["senderId"] as? String,
+                let text = data["text"] as? String,
+                let currentUserId,
+                change.type == .added,
+                senderId != currentUserId
+            else { continue }
+
+            // Trigger notification for new message
+            if let notificationService {
+                Task {
+                    // Fetch sender name
+                    let senderName = await fetchSenderName(senderId: senderId) ?? "Unknown"
+
+                    await notificationService.handleNewMessage(
+                        conversationId: conversationId,
+                        senderName: senderName,
+                        messagePreview: text,
+                        isAppInForeground: isAppInForeground
+                    )
+                }
+            }
+        }
+
+        // Mark messages as delivered
         for change in snapshot.documentChanges {
             let data = change.document.data()
             guard
@@ -1078,6 +1113,33 @@ final class MessagingService {
         }
 
         try modelContext.save()
+    }
+
+    private func fetchSenderName(senderId: String) async -> String? {
+        guard let modelContext else { return nil }
+
+        var descriptor = FetchDescriptor<UserEntity>(
+            predicate: #Predicate<UserEntity> { user in
+                user.id == senderId
+            }
+        )
+        descriptor.fetchLimit = 1
+
+        if let user = try? modelContext.fetch(descriptor).first {
+            return user.displayName
+        }
+
+        // If not found locally, try fetching from Firestore
+        do {
+            let userDoc = try await db.collection("users").document(senderId).getDocument()
+            if let displayName = userDoc.data()?["displayName"] as? String {
+                return displayName
+            }
+        } catch {
+            debugLog("Failed to fetch sender name: \(error.localizedDescription)")
+        }
+
+        return nil
     }
 
     private func debugLog(_ message: String) {

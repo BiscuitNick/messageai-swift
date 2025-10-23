@@ -16,6 +16,7 @@ struct ChatView: View {
 
     @Environment(MessagingService.self) private var messagingService
     @Environment(AuthService.self) private var authService
+    @Environment(NotificationService.self) private var notificationService
 
     @State private var messageText: String = ""
     @State private var sendError: String?
@@ -130,6 +131,12 @@ struct ChatView: View {
         }
         .navigationTitle(chatTitle)
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            notificationService.setActiveConversation(conversationId)
+        }
+        .onDisappear {
+            notificationService.setActiveConversation(nil)
+        }
         .alert(
             "Unable to send message",
             isPresented: .init(
