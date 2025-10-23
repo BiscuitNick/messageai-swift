@@ -2,6 +2,7 @@ import FirebaseAuth
 import FirebaseCore
 import FirebaseFunctions
 import SwiftUI
+import SwiftData
 
 struct DebugView: View {
     let currentUser: AuthService.AppUser
@@ -9,7 +10,10 @@ struct DebugView: View {
     @Environment(AuthService.self) private var authService
     @Environment(NotificationService.self) private var notificationService
     @Environment(MessagingService.self) private var messagingService
+    @Environment(FirestoreService.self) private var firestoreService
     private let functions = Functions.functions(region: "us-central1")
+
+    @Query private var bots: [BotEntity]
 
     @State private var serverTimeResult: String?
     @State private var serverTimeError: String?
@@ -22,19 +26,59 @@ struct DebugView: View {
     @State private var deleteUsersStatus: String?
     @State private var deleteUsersError: String?
     @State private var isDeletingUsers = false
+    @State private var recreateBotsStatus: String?
+    @State private var recreateBotsError: String?
+    @State private var isRecreatingBots = false
+    @State private var deleteBotsStatus: String?
+    @State private var deleteBotsError: String?
+    @State private var isDeletingBots = false
 
     var body: some View {
         NavigationStack {
             List {
+                maintenanceSection
                 firebaseSection
                 authSection
+                botsSection
                 messagingSection
                 notificationSection
-                maintenanceSection
                 serverTimeSection
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("Debug")
+            .navigationTitle("Test")
+        }
+    }
+
+    private var botsSection: some View {
+        Section("AI Bots") {
+            LabeledContent("Bots in SwiftData", value: "\(bots.count)")
+
+            if bots.isEmpty {
+                Text("No bots found")
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+            } else {
+                ForEach(bots) { bot in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 4) {
+                            Text(bot.name)
+                                .font(.headline)
+                            Text("✨")
+                                .font(.caption)
+                        }
+                        Text("ID: \(bot.id)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text("Category: \(bot.category)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text("Active: \(bot.isActive ? "Yes" : "No")")
+                            .font(.caption)
+                            .foregroundStyle(bot.isActive ? .green : .red)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
         }
     }
 
@@ -85,6 +129,32 @@ struct DebugView: View {
 
     private var maintenanceSection: some View {
         Section("Database Tools") {
+            Button {
+                Task { await recreateBots() }
+            } label: {
+                if isRecreatingBots {
+                    ProgressView()
+                } else {
+                    Label("Recreate Bots", systemImage: "sparkles")
+                }
+            }
+            .disabled(isRecreatingBots)
+
+            statusText(success: recreateBotsStatus, error: recreateBotsError)
+
+            Button(role: .destructive) {
+                Task { await deleteBots() }
+            } label: {
+                if isDeletingBots {
+                    ProgressView()
+                } else {
+                    Label("Delete Bots", systemImage: "trash")
+                }
+            }
+            .disabled(isDeletingBots)
+
+            statusText(success: deleteBotsStatus, error: deleteBotsError)
+
             Button {
                 Task { await triggerMockSeed() }
             } label: {
@@ -198,6 +268,34 @@ struct DebugView: View {
             deleteUsersStatus = "Users cleared at \(Date().formatted(dateTimeFormatter))"
         } catch {
             deleteUsersError = describe(error)
+        }
+    }
+
+    @MainActor
+    private func recreateBots() async {
+        recreateBotsStatus = nil
+        recreateBotsError = nil
+        isRecreatingBots = true
+        defer { isRecreatingBots = false }
+        do {
+            try await firestoreService.ensureBotExists()
+            recreateBotsStatus = "Bots recreated at \(Date().formatted(dateTimeFormatter))"
+        } catch {
+            recreateBotsError = describe(error)
+        }
+    }
+
+    @MainActor
+    private func deleteBots() async {
+        deleteBotsStatus = nil
+        deleteBotsError = nil
+        isDeletingBots = true
+        defer { isDeletingBots = false }
+        do {
+            try await firestoreService.deleteBots()
+            deleteBotsStatus = "Bots deleted at \(Date().formatted(dateTimeFormatter))"
+        } catch {
+            deleteBotsError = describe(error)
         }
     }
 

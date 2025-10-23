@@ -9,9 +9,12 @@ import SwiftUI
 import SwiftData
 
 struct NewConversationSheet: View {
+    @Environment(NetworkMonitor.self) private var networkMonitor
+
     enum Mode: String, CaseIterable, Identifiable {
         case direct = "Direct"
         case group = "Group"
+        case aiChat = "AI Chat"
 
         var id: String { rawValue }
 
@@ -19,6 +22,7 @@ struct NewConversationSheet: View {
             switch self {
             case .direct: return "New Message"
             case .group: return "New Group"
+            case .aiChat: return "Chat with AI"
             }
         }
     }
@@ -36,6 +40,8 @@ struct NewConversationSheet: View {
     @State private var isCreating: Bool = false
     @State private var errorMessage: String?
     @State private var searchText: String = ""
+
+    @Query(filter: #Predicate<BotEntity> { $0.isActive }) private var bots: [BotEntity]
 
     init(
         currentUser: AuthService.AppUser,
@@ -70,39 +76,109 @@ struct NewConversationSheet: View {
                     }
                 }
 
-                Section {
-                    TextField("Search", text: $searchText)
-                        .textInputAutocapitalization(.none)
-                        .disableAutocorrection(true)
-                        .disabled(isCreating)
-                }
+                if mode == .aiChat {
+                    Section(header: Text("Available AI Agents")) {
+                        if bots.isEmpty {
+                            Text("No AI agents available")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(bots) { bot in
+                                Button {
+                                    toggleSelection(for: bot.id)
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        AvatarView(
+                                            bot: bot,
+                                            size: 36,
+                                            showPresenceIndicator: true,
+                                            isOnline: networkMonitor.isConnected
+                                        )
 
-                Section(header: Text("Participants")) {
-                    if filteredUsers.isEmpty {
-                        Text("No users found")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(filteredUsers) { user in
-                            Button {
-                                toggleSelection(for: user.id)
-                            } label: {
-                                HStack(spacing: 12) {
-                                    ParticipantAvatar(initials: initials(for: user.displayName))
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            HStack(spacing: 4) {
+                                                Text(bot.name)
+                                                    .foregroundStyle(.primary)
+                                                Text("✨")
+                                                    .font(.caption)
+                                            }
+                                            Text(bot.category.capitalized)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
 
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(user.displayName)
-                                            .foregroundStyle(.primary)
-                                        Text(user.email)
+                                        Spacer()
+
+                                        selectionIndicator(for: bot.id)
+                                    }
+                                }
+                                .disabled(isCreating)
+
+                                if selectedParticipantIDs.contains(bot.id) {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Text(bot.botDescription)
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
+                                            .padding(.horizontal, 48)
+
+                                        if !bot.capabilities.isEmpty {
+                                            HStack(spacing: 6) {
+                                                ForEach(bot.capabilities.prefix(3), id: \.self) { capability in
+                                                    Text(capability)
+                                                        .font(.caption2)
+                                                        .padding(.horizontal, 8)
+                                                        .padding(.vertical, 4)
+                                                        .background(Color.accentColor.opacity(0.1))
+                                                        .clipShape(Capsule())
+                                                }
+                                            }
+                                            .padding(.horizontal, 48)
+                                        }
                                     }
-
-                                    Spacer()
-
-                                    selectionIndicator(for: user.id)
+                                    .padding(.vertical, 4)
                                 }
                             }
+                        }
+                    }
+                } else {
+                    Section {
+                        TextField("Search", text: $searchText)
+                            .textInputAutocapitalization(.none)
+                            .disableAutocorrection(true)
                             .disabled(isCreating)
+                    }
+
+                    Section(header: Text("Participants")) {
+                        if filteredUsers.isEmpty {
+                            Text("No users found")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(filteredUsers) { user in
+                                Button {
+                                    toggleSelection(for: user.id)
+                                } label: {
+                                    HStack(spacing: 12) {
+                                        AvatarView(
+                                            user: user,
+                                            size: 36,
+                                            showPresenceIndicator: true,
+                                            isOnline: networkMonitor.isConnected
+                                        )
+
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(user.displayName)
+                                                .foregroundStyle(.primary)
+                                            Text(user.email)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+
+                                        Spacer()
+
+                                        selectionIndicator(for: user.id)
+                                    }
+                                }
+                                .disabled(isCreating)
+                            }
                         }
                     }
                 }
@@ -168,12 +244,14 @@ struct NewConversationSheet: View {
         case .group:
             let trimmed = groupName.trimmingCharacters(in: .whitespacesAndNewlines)
             return selectedParticipantIDs.count >= 2 && !trimmed.isEmpty
+        case .aiChat:
+            return selectedParticipantIDs.count == 1
         }
     }
 
     private func toggleSelection(for userId: String) {
         switch mode {
-        case .direct:
+        case .direct, .aiChat:
             if selectedParticipantIDs.contains(userId) {
                 selectedParticipantIDs.removeAll()
             } else {
@@ -189,19 +267,37 @@ struct NewConversationSheet: View {
     }
 
     private func createConversation() {
-        let participantIDs = Array(selectedParticipantIDs)
-        let name = groupName.trimmingCharacters(in: .whitespacesAndNewlines)
-
         Task {
             isCreating = true
             defer { isCreating = false }
 
             do {
-                let id = try await messagingService.createConversation(
-                    with: participantIDs,
-                    isGroup: mode == .group,
-                    groupName: mode == .group ? name : nil
-                )
+                let id: String
+
+                switch mode {
+                case .aiChat:
+                    // Create NEW conversation with AI bot (always create new, never resume)
+                    let participantIDs = Array(selectedParticipantIDs)
+                    id = try await messagingService.createConversationWithBot(
+                        botId: participantIDs.first ?? "dash-bot"
+                    )
+                case .direct:
+                    let participantIDs = Array(selectedParticipantIDs)
+                    id = try await messagingService.createConversation(
+                        with: participantIDs,
+                        isGroup: false,
+                        groupName: nil
+                    )
+                case .group:
+                    let participantIDs = Array(selectedParticipantIDs)
+                    let name = groupName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    id = try await messagingService.createConversation(
+                        with: participantIDs,
+                        isGroup: true,
+                        groupName: name
+                    )
+                }
+
                 onCreated(id)
                 dismiss()
             } catch {
@@ -214,7 +310,7 @@ struct NewConversationSheet: View {
         let isSelected = selectedParticipantIDs.contains(userId)
         let symbol: String
         switch mode {
-        case .direct:
+        case .direct, .aiChat:
             symbol = isSelected ? "largecircle.fill.circle" : "circle"
         case .group:
             symbol = isSelected ? "checkmark.circle.fill" : "circle"
@@ -228,20 +324,5 @@ struct NewConversationSheet: View {
         let components = name.split(separator: " ")
         let initials = components.prefix(2).compactMap { $0.first }.map(String.init)
         return initials.prefix(2).joined()
-    }
-}
-
-private struct ParticipantAvatar: View {
-    let initials: String
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .fill(Color.accentColor.opacity(0.15))
-            Text(initials.isEmpty ? "?" : initials.uppercased())
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(Color.accentColor)
-        }
-        .frame(width: 36, height: 36)
     }
 }

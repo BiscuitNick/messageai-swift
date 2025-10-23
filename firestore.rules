@@ -26,6 +26,14 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /bots/{botId} {
+      allow read: if isAuthenticated();
+
+      allow create, update: if isAuthenticated();
+
+      allow delete: if false;
+    }
+
     match /conversations/{conversationId} {
       allow read: if isAuthenticated()
         && isConversationParticipant(resource.data);
@@ -45,15 +53,22 @@ service cloud.firestore {
           && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
 
         allow create: if isAuthenticated()
-          && request.resource.data.senderId == request.auth.uid
+          && (request.resource.data.senderId == request.auth.uid
+              || request.resource.data.senderId.matches('bot:.*'))
           && request.resource.data.conversationId == conversationId
           && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
 
         allow update: if isAuthenticated()
           && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data)
-          && request.resource.data.keys().hasOnly([
-                'deliveryStatus', 'readBy', 'updatedAt'
+          && (request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'deliveryStatus', 'readBy', 'readReceipts', 'updatedAt'
              ])
+             || request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'deliveryStatus', 'updatedAt'
+             ])
+             || request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'readBy', 'updatedAt'
+             ]))
           && request.resource.data.senderId == resource.data.senderId
           && request.resource.data.conversationId == resource.data.conversationId;
 

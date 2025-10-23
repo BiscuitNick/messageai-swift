@@ -25,6 +25,7 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var hasConfiguredContext = false
     @State private var hasStartedUserListener = false
+    @State private var hasStartedBotListener = false
     @State private var selectedTab: TabSelection = .chats
 
     var body: some View {
@@ -63,9 +64,18 @@ struct ContentView: View {
             guard !hasConfiguredContext else { return }
             authService.configure(modelContext: modelContext, firestoreService: firestoreService)
             firestoreService.startUserListener(modelContext: modelContext)
+            firestoreService.startBotListener(modelContext: modelContext)
             hasStartedUserListener = true
+            hasStartedBotListener = true
             await notificationService.requestAuthorization()
             await notificationService.registerForRemoteNotifications()
+            // Ensure bot exists in Firestore
+            do {
+                try await firestoreService.ensureBotExists()
+                print("✅ Bot initialization complete")
+            } catch {
+                print("❌ Failed to ensure bot exists: \(error.localizedDescription)")
+            }
             if let userId = authService.currentUser?.id {
                 messagingService.configure(modelContext: modelContext, currentUserId: userId, notificationService: notificationService)
             }
@@ -80,6 +90,10 @@ struct ContentView: View {
                         firestoreService.stopUserListener()
                         hasStartedUserListener = false
                     }
+                    if hasStartedBotListener {
+                        firestoreService.stopBotListener()
+                        hasStartedBotListener = false
+                    }
                     messagingService.reset()
                     authService.sceneDidEnterBackground()
                     selectedTab = .chats
@@ -88,6 +102,10 @@ struct ContentView: View {
                 if !hasStartedUserListener {
                     firestoreService.startUserListener(modelContext: modelContext)
                     hasStartedUserListener = true
+                }
+                if !hasStartedBotListener {
+                    firestoreService.startBotListener(modelContext: modelContext)
+                    hasStartedBotListener = true
                 }
                 await notificationService.registerForRemoteNotifications()
                 messagingService.configure(modelContext: modelContext, currentUserId: newId, notificationService: notificationService)

@@ -16,14 +16,13 @@ struct ConversationsRootView: View {
     private var conversations: [ConversationEntity]
 
     @Query private var users: [UserEntity]
+    @Query private var bots: [BotEntity]
+
+    @Environment(NetworkMonitor.self) private var networkMonitor
 
     @State private var isComposePresented = false
     @State private var selectedConversationID: String?
     @State private var searchText: String = ""
-
-    private var userLookup: [String: UserEntity] {
-        Dictionary(uniqueKeysWithValues: users.map { ($0.id, $0) })
-    }
 
     private var selectableUsers: [UserEntity] {
         users.filter { $0.id != currentUser.id }
@@ -61,12 +60,15 @@ struct ConversationsRootView: View {
                                 ConversationRow(
                                     conversation: conversation,
                                     currentUser: currentUser,
-                                    userLookup: userLookup
+                                    users: users,
+                                    bots: bots,
+                                    isOnline: networkMonitor.isConnected
                                 )
                             }
                         }
                     }
                     .listStyle(.insetGrouped)
+                    .id(users.count) // Force refresh when users change
                 }
             }
             .navigationTitle("Chats")
@@ -97,11 +99,22 @@ struct ConversationsRootView: View {
         if conversation.isGroup {
             return conversation.groupName ?? "Group Chat"
         }
+        let userLookup = Dictionary(uniqueKeysWithValues: users.map { ($0.id, $0) })
+        let botLookup = Dictionary(uniqueKeysWithValues: bots.map { ($0.id, $0) })
         let otherParticipant = conversation.participantIds.first { $0 != currentUser.id }
-        if let otherParticipant,
-           let user = userLookup[otherParticipant] {
+
+        guard let otherParticipant else { return "Conversation" }
+
+        // Check if it's a bot (format: "bot:botId")
+        if otherParticipant.hasPrefix("bot:") {
+            let botId = String(otherParticipant.dropFirst(4))
+            if let bot = botLookup[botId] {
+                return bot.name
+            }
+        } else if let user = userLookup[otherParticipant] {
             return user.displayName
         }
+
         return "Conversation"
     }
 
@@ -116,7 +129,17 @@ struct ConversationsRootView: View {
 private struct ConversationRow: View {
     let conversation: ConversationEntity
     let currentUser: AuthService.AppUser
-    let userLookup: [String: UserEntity]
+    let users: [UserEntity]
+    let bots: [BotEntity]
+    let isOnline: Bool
+
+    private var userLookup: [String: UserEntity] {
+        Dictionary(uniqueKeysWithValues: users.map { ($0.id, $0) })
+    }
+
+    private var botLookup: [String: BotEntity] {
+        Dictionary(uniqueKeysWithValues: bots.map { ($0.id, $0) })
+    }
 
     private var title: String {
         if conversation.isGroup {
@@ -126,12 +149,25 @@ private struct ConversationRow: View {
         let otherParticipant = conversation.participantIds
             .first(where: { $0 != currentUser.id })
 
-        if let otherParticipant,
-           let user = userLookup[otherParticipant] {
+        guard let otherParticipant else { return "Conversation" }
+
+        // Check if it's a bot (format: "bot:botId")
+        if otherParticipant.hasPrefix("bot:") {
+            let botId = String(otherParticipant.dropFirst(4))
+            if let bot = botLookup[botId] {
+                return bot.name
+            }
+        } else if let user = userLookup[otherParticipant] {
             return user.displayName
         }
 
         return "Conversation"
+    }
+
+    private var isBot: Bool {
+        guard !conversation.isGroup else { return false }
+        let otherParticipant = conversation.participantIds.first(where: { $0 != currentUser.id })
+        return otherParticipant?.hasPrefix("bot:") ?? false
     }
 
     private var subtitle: String {
@@ -158,29 +194,30 @@ private struct ConversationRow: View {
             } else {
                 return .offline
             }
-        } else if let other = otherParticipants.first,
-                  let user = userLookup[other] {
-            return user.presenceStatus
+        } else if let other = otherParticipants.first {
+            // Check if it's a bot
+            if other.hasPrefix("bot:") {
+                return isOnline ? .online : .offline
+            } else if let user = userLookup[other] {
+                return user.presenceStatus
+            }
         }
         return .offline
     }
 
     var body: some View {
         HStack(spacing: 12) {
-            AvatarPlaceholderView(
-                initials: initials(for: title),
-                profileURL: avatarProfileURL,
-                status: presenceStatus
-            )
+            avatarView
 
             VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
+                HStack(spacing: 4) {
                     Text(title)
                         .font(.headline)
                         .foregroundStyle(.primary)
                         .lineLimit(1)
-                    if !conversation.isGroup {
-                        PresenceStatusBadge(status: presenceStatus)
+                    if isBot {
+                        Text("✨")
+                            .font(.caption)
                     }
                 }
                 Text(subtitle)
@@ -215,71 +252,48 @@ private struct ConversationRow: View {
         return initials.prefix(2).joined()
     }
 
-    private var avatarProfileURL: String? {
-        guard !conversation.isGroup else { return nil }
-        let otherParticipant = conversation.participantIds.first { $0 != currentUser.id }
-        if let otherParticipant,
-           let user = userLookup[otherParticipant],
-           let url = user.profilePictureURL,
-           !url.isEmpty {
-            return url
-        }
-        return nil
-    }
-}
-
-private struct AvatarPlaceholderView: View {
-    let initials: String
-    let profileURL: String?
-    let status: PresenceStatus
-
-    var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            avatarContent
-            Circle()
-                .fill(status.indicatorColor.opacity(status == .offline ? 0.4 : 1))
-                .frame(width: 10, height: 10)
-                .overlay(
-                    Circle()
-                        .stroke(Color(.systemBackground), lineWidth: 1)
-                )
-                .offset(x: 4, y: 4)
-        }
-        .frame(width: 44, height: 44)
-    }
-
     @ViewBuilder
-    private var avatarContent: some View {
-        if let profileURL,
-           let url = URL(string: profileURL) {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .success(let image):
-                    image
-                        .resizable()
-                        .scaledToFill()
-                case .failure:
-                    initialsView
-                case .empty:
-                    ProgressView()
-                        .tint(Color.accentColor)
-                @unknown default:
-                    initialsView
+    private var avatarView: some View {
+        if conversation.isGroup {
+            // Group chat avatar
+            AvatarView(
+                entity: .custom(initials: initials(for: title), profileURL: nil),
+                size: 44,
+                showPresenceIndicator: false,
+                isOnline: isOnline
+            )
+        } else if let otherParticipant = conversation.participantIds.first(where: { $0 != currentUser.id }) {
+            // Check if it's a bot
+            if otherParticipant.hasPrefix("bot:") {
+                let botId = String(otherParticipant.dropFirst(4))
+                if let bot = botLookup[botId] {
+                    AvatarView(bot: bot, size: 44, showPresenceIndicator: true, isOnline: isOnline)
+                } else {
+                    AvatarView(
+                        entity: .custom(initials: initials(for: title), profileURL: nil),
+                        size: 44,
+                        showPresenceIndicator: true,
+                        isOnline: isOnline
+                    )
                 }
+            } else if let user = userLookup[otherParticipant] {
+                AvatarView(user: user, size: 44, showPresenceIndicator: true, isOnline: isOnline)
+            } else {
+                AvatarView(
+                    entity: .custom(initials: initials(for: title), profileURL: nil),
+                    size: 44,
+                    showPresenceIndicator: true,
+                    isOnline: isOnline
+                )
             }
-            .clipShape(Circle())
         } else {
-            initialsView
-        }
-    }
-
-    private var initialsView: some View {
-        ZStack {
-            Circle()
-                .fill(Color.accentColor.opacity(0.15))
-            Text(initials.isEmpty ? "?" : initials.uppercased())
-                .font(.callout.weight(.semibold))
-                .foregroundStyle(Color.accentColor)
+            // Fallback
+            AvatarView(
+                entity: .custom(initials: "?", profileURL: nil),
+                size: 44,
+                showPresenceIndicator: false,
+                isOnline: isOnline
+            )
         }
     }
 }

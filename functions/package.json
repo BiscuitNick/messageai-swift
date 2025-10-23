@@ -3,6 +3,7 @@
   "scripts": {
     "build": "tsc",
     "lint": "eslint --ext .ts src",
+    "test": "npm run build && node --test lib/__tests__/**/*.test.js",
     "serve": "npm run build && firebase emulators:start --only functions",
     "shell": "npm run build && firebase functions:shell",
     "start": "npm run shell",

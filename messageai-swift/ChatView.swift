@@ -17,17 +17,37 @@ struct ChatView: View {
     @Environment(MessagingService.self) private var messagingService
     @Environment(AuthService.self) private var authService
     @Environment(NotificationService.self) private var notificationService
+    @Environment(FirestoreService.self) private var firestoreService
+    @Environment(NetworkMonitor.self) private var networkMonitor
 
     @State private var messageText: String = ""
     @State private var sendError: String?
     @State private var isSending: Bool = false
+    @State private var isBotTyping: Bool = false
     @FocusState private var composerFocused: Bool
 
+    private var isAIConversation: Bool {
+        conversation.participantIds.contains { $0.hasPrefix("bot:") }
+    }
+
+    private var activeBot: BotEntity? {
+        guard let botParticipantId = conversation.participantIds.first(where: { $0.hasPrefix("bot:") }) else {
+            return nil
+        }
+        let botId = String(botParticipantId.dropFirst(4)) // Remove "bot:" prefix
+        return botLookup[botId]
+    }
+
     @Query private var participants: [UserEntity]
+    @Query private var bots: [BotEntity]
     @Query private var messages: [MessageEntity]
 
     private var participantLookup: [String: UserEntity] {
         Dictionary(uniqueKeysWithValues: participants.map { ($0.id, $0) })
+    }
+
+    private var botLookup: [String: BotEntity] {
+        Dictionary(uniqueKeysWithValues: bots.map { ($0.id, $0) })
     }
 
     private var groupedMessages: [(date: Date, items: [MessageEntity])] {
@@ -75,8 +95,10 @@ struct ChatView: View {
                                         isCurrentUser: message.senderId == currentUser.id,
                                         currentUserId: currentUser.id,
                                         conversation: conversation,
-                                        sender: participantLookup[message.senderId],
-                                        participants: participants
+                                        sender: senderForMessage(message),
+                                        bot: botForMessage(message),
+                                        participants: participants,
+                                        isOnline: networkMonitor.isConnected
                                     )
                                     .id(message.id)
                                 }
@@ -85,6 +107,12 @@ struct ChatView: View {
                                     .padding(.vertical, 4)
                             }
                         }
+
+                        if isBotTyping {
+                            TypingIndicator(bot: activeBot, isOnline: networkMonitor.isConnected)
+                                .id("typing-indicator")
+                        }
+
                         Spacer().frame(height: 8)
                     }
                     .padding(.vertical, 12)
@@ -105,12 +133,27 @@ struct ChatView: View {
                         }
                     }
                 )
-                .onChange(of: messages.count) { _, _ in
+                .onChange(of: messages.count) { oldCount, newCount in
                     withAnimation(.easeOut(duration: 0.25)) {
                         scrollToBottom(proxy: proxy)
                     }
+
+                    // Turn off typing indicator when bot message arrives
+                    if isAIConversation && isBotTyping && newCount > oldCount {
+                        if let lastMessage = messages.last, lastMessage.senderId.hasPrefix("bot:") {
+                            isBotTyping = false
+                        }
+                    }
+
                     Task {
                         await messagingService.markConversationAsRead(conversationId)
+                    }
+                }
+                .onChange(of: isBotTyping) { _, isTyping in
+                    if isTyping {
+                        withAnimation(.easeOut(duration: 0.25)) {
+                            scrollToBottom(proxy: proxy)
+                        }
                     }
                 }
                 .task {
@@ -157,9 +200,15 @@ struct ChatView: View {
             return conversation.groupName ?? "Group Chat"
         }
         let others = participantIds.filter { $0 != currentUser.id }
-        if let first = others.first,
-           let user = participants.first(where: { $0.id == first }) {
-            return user.displayName
+        if let first = others.first {
+            // Check if it's a bot
+            if first.hasPrefix("bot:") {
+                if let bot = bots.first(where: { "bot:\($0.id)" == first }) {
+                    return "\(bot.name) ✨"
+                }
+            } else if let user = participants.first(where: { $0.id == first }) {
+                return user.displayName
+            }
         }
         return "Conversation"
     }
@@ -174,8 +223,34 @@ struct ChatView: View {
             isSending = true
             defer { isSending = false }
             do {
+                // Send user's message
                 try await messagingService.sendMessage(conversationId: conversationId, text: content)
                 messageText = ""
+
+                // If this is an AI conversation, call the agent
+                // The agent will write its response directly to Firestore
+                if isAIConversation {
+                    // Show typing indicator
+                    isBotTyping = true
+
+                    do {
+                        // Pass full conversation history for context
+                        let conversationHistory = messages.map { message in
+                            FirestoreService.AgentMessage(
+                                role: message.senderId == currentUser.id ? "user" : "assistant",
+                                content: message.text
+                            )
+                        }
+                        try await firestoreService.chatWithAgent(
+                            messages: conversationHistory,
+                            conversationId: conversationId
+                        )
+                    } catch {
+                        // If AI fails, hide typing indicator and log the error
+                        isBotTyping = false
+                        print("AI error: \(error.localizedDescription)")
+                    }
+                }
             } catch {
                 sendError = error.localizedDescription
             }
@@ -186,9 +261,26 @@ struct ChatView: View {
     }
 
     private func scrollToBottom(proxy: ScrollViewProxy) {
-        if let lastMessage = messages.last {
+        if isBotTyping {
+            proxy.scrollTo("typing-indicator", anchor: .bottom)
+        } else if let lastMessage = messages.last {
             proxy.scrollTo(lastMessage.id, anchor: .bottom)
         }
+    }
+
+    private func senderForMessage(_ message: MessageEntity) -> UserEntity? {
+        if message.senderId.hasPrefix("bot:") {
+            return nil
+        }
+        return participantLookup[message.senderId]
+    }
+
+    private func botForMessage(_ message: MessageEntity) -> BotEntity? {
+        if message.senderId.hasPrefix("bot:") {
+            let botId = String(message.senderId.dropFirst(4)) // Remove "bot:" prefix
+            return botLookup[botId]
+        }
+        return nil
     }
 }
 
@@ -198,8 +290,28 @@ private struct MessageBubble: View {
     let currentUserId: String
     let conversation: ConversationEntity
     let sender: UserEntity?
+    let bot: BotEntity?
     let participants: [UserEntity]
+    let isOnline: Bool
     @State private var showingReceiptDetails = false
+
+    private var displayName: String {
+        if let bot {
+            return bot.name
+        }
+        return sender?.displayName ?? "Unknown"
+    }
+
+    private var avatarURL: String? {
+        if let bot {
+            return bot.avatarURL
+        }
+        return sender?.profilePictureURL
+    }
+
+    private var presenceStatus: PresenceStatus {
+        sender?.presenceStatus ?? .offline
+    }
 
     private static let palette: [Color] = [
         Color(red: 0.17, green: 0.33, blue: 0.82),  // Blue
@@ -357,11 +469,28 @@ private struct MessageBubble: View {
             if isCurrentUser { Spacer(minLength: 40) }
 
             if !isCurrentUser {
-                AvatarView(
-                    initials: senderInitials,
-                    profileURL: sender?.profilePictureURL,
-                    status: sender?.presenceStatus ?? .offline
-                )
+                if let bot {
+                    AvatarView(
+                        bot: bot,
+                        size: 32,
+                        showPresenceIndicator: true,
+                        isOnline: isOnline
+                    )
+                } else if let sender {
+                    AvatarView(
+                        user: sender,
+                        size: 32,
+                        showPresenceIndicator: true,
+                        isOnline: isOnline
+                    )
+                } else {
+                    AvatarView(
+                        entity: .custom(initials: senderInitials, profileURL: avatarURL),
+                        size: 32,
+                        showPresenceIndicator: true,
+                        isOnline: isOnline
+                    )
+                }
             }
 
             VStack(alignment: isCurrentUser ? .trailing : .leading, spacing: 4) {
@@ -381,8 +510,7 @@ private struct MessageBubble: View {
     }
 
     private var senderInitials: String {
-        guard let name = sender?.displayName else { return "?" }
-        return initials(from: name)
+        return initials(from: displayName)
     }
 
     private var bubbleContent: some View {
@@ -528,59 +656,6 @@ private struct ReadStatusPopover: View {
     }
 }
 
-private struct AvatarView: View {
-    let initials: String
-    let profileURL: String?
-    let status: PresenceStatus
-
-    var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            ZStack {
-                Circle()
-                    .fill(Color.accentColor.opacity(0.2))
-
-                if let profileURL,
-                   let url = URL(string: profileURL) {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .scaledToFill()
-                        case .failure:
-                            initialsView
-                        case .empty:
-                            ProgressView()
-                                .tint(Color.accentColor)
-                        @unknown default:
-                            initialsView
-                        }
-                    }
-                    .clipShape(Circle())
-                } else {
-                    initialsView
-                }
-            }
-            .frame(width: 32, height: 32)
-
-            Circle()
-                .fill(status.indicatorColor.opacity(status == .offline ? 0.4 : 1))
-                .frame(width: 10, height: 10)
-                .overlay(
-                    Circle()
-                        .stroke(Color(.systemBackground), lineWidth: 1)
-                )
-                .offset(x: 3, y: 3)
-        }
-    }
-
-    private var initialsView: some View {
-        Text(initials.isEmpty ? "?" : initials.uppercased())
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(Color.accentColor)
-    }
-}
-
 private struct DateHeader: View {
     let date: Date
     private let formatter: DateFormatter = {
@@ -599,6 +674,51 @@ private struct DateHeader: View {
             .clipShape(Capsule())
             .frame(maxWidth: .infinity)
     }
+}
+
+private struct TypingIndicator: View {
+    let bot: BotEntity?
+    let isOnline: Bool
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            if let bot {
+                AvatarView(
+                    bot: bot,
+                    size: 32,
+                    showPresenceIndicator: true,
+                    isOnline: isOnline
+                )
+            }
+
+            HStack(spacing: 4) {
+                ForEach(0..<3) { index in
+                    Circle()
+                        .fill(Color.gray.opacity(0.5))
+                        .frame(width: 8, height: 8)
+                        .scaleEffect(animationScale)
+                        .animation(
+                            Animation.easeInOut(duration: 0.6)
+                                .repeatForever()
+                                .delay(Double(index) * 0.2),
+                            value: animationScale
+                        )
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color(.systemGray5))
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+
+            Spacer()
+        }
+        .padding(.leading, 8)
+        .onAppear {
+            animationScale = 1.2
+        }
+    }
+
+    @State private var animationScale: CGFloat = 0.8
 }
 
 private struct ComposerView: View {

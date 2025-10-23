@@ -264,6 +264,54 @@ export const deleteUsers = onCall(async (request) => {
   return { status: "success" };
 });
 
+export const createBots = onCall(async (request) => {
+  requireAuth(request);
+
+  const botsRef = firestore.collection("bots");
+  const timestamp = admin.firestore.FieldValue.serverTimestamp();
+
+  // Create Dash Bot
+  await botsRef.doc("dash-bot").set({
+    name: "Dash Bot",
+    description: "I can help you with answering questions, drafting messages, providing recommendations, and more. What can I help you with today?",
+    avatarURL: "https://dpj39bucz99gb.cloudfront.net/n8qq1sycd9rg80ct1zbrfw5k58",
+    category: "general",
+    capabilities: ["conversation", "question-answering", "recommendations", "drafting"],
+    model: "gpt-4o",
+    systemPrompt: "You are Dash Bot, a helpful AI assistant. Be concise, friendly, and accurate.",
+    tools: [],
+    isActive: true,
+    updatedAt: timestamp,
+    createdAt: timestamp,
+  }, { merge: true });
+
+  // Create Dad Bot
+  await botsRef.doc("dad-bot").set({
+    name: "Dad Bot",
+    description: "Your go-to source for dad jokes and fatherly advice. Need a laugh or some wisdom? I've got you covered!",
+    avatarURL: "https://dpj39bucz99gb.cloudfront.net/n8qq1sycd9rg80ct1zbrfw5k58",
+    category: "humor",
+    capabilities: ["dad-jokes", "advice", "conversation"],
+    model: "gpt-4o",
+    systemPrompt: "You are Dad Bot, a friendly AI that specializes in dad jokes and fatherly advice. When users explicitly ask for advice, provide thoughtful, encouraging fatherly guidance. When users explicitly ask for a joke, respond with a relevant dad joke. Otherwise, use your best judgment to determine whether the situation calls for humor or wisdom - consider the tone and context of their message. Keep responses warm, wholesome, and appropriately cheesy.",
+    tools: [],
+    isActive: true,
+    updatedAt: timestamp,
+    createdAt: timestamp,
+  }, { merge: true });
+
+  return {
+    status: "success",
+    created: ["dash-bot", "dad-bot"]
+  };
+});
+
+export const deleteBots = onCall(async (request) => {
+  requireAuth(request);
+  await admin.firestore().recursiveDelete(firestore.collection("bots"));
+  return { status: "success" };
+});
+
 function requireAuth<T>(request: CallableRequest<T>): string {
   const uid = request.auth?.uid;
   if (!uid) {
@@ -338,46 +386,99 @@ type AgentMessage = {
 
 type AgentRequest = {
   messages: AgentMessage[];
-  prompt?: string;
+  conversationId: string;
 };
 
 export const chatWithAgent = onCall<AgentRequest>(async (request) => {
-  requireAuth(request);
+  const uid = requireAuth(request);
 
-  const { messages = [], prompt } = request.data;
+  const { messages = [], conversationId } = request.data;
 
-  if (!prompt && messages.length === 0) {
+  if (messages.length === 0) {
     throw new HttpsError(
       "invalid-argument",
-      "Either 'prompt' or 'messages' must be provided"
+      "messages array is required"
+    );
+  }
+
+  if (!conversationId) {
+    throw new HttpsError(
+      "invalid-argument",
+      "conversationId is required"
     );
   }
 
   try {
-    let result;
+    // Get conversation to find which bot is being used
+    const conversationRef = firestore.collection(COLLECTION_CONVERSATIONS).doc(conversationId);
+    const conversationDoc = await conversationRef.get();
+    const conversationData = conversationDoc.data();
 
-    if (prompt) {
-      result = await assistantAgent.generate({
-        prompt: prompt,
-      });
-
-      return {
-        response: result.text,
-        usage: result.usage,
-      };
-    } else {
-      result = await assistantAgent.generate({
-        messages: messages.map((msg) => ({
-          role: msg.role,
-          content: msg.content,
-        })),
-      });
-
-      return {
-        response: result.text,
-        usage: result.usage,
-      };
+    if (!conversationData) {
+      throw new HttpsError("not-found", "Conversation not found");
     }
+
+    // Find the bot participant (format: "bot:botId")
+    const botParticipant = conversationData.participantIds.find((id: string) =>
+      id.startsWith("bot:")
+    );
+
+    if (!botParticipant) {
+      throw new HttpsError("invalid-argument", "No bot found in conversation");
+    }
+
+    // Extract bot ID from "bot:botId" format
+    const botId = botParticipant.replace("bot:", "");
+
+    // Get bot configuration from bots collection
+    const botDoc = await firestore.collection("bots").doc(botId).get();
+    const botData = botDoc.data();
+
+    if (!botData) {
+      throw new HttpsError("not-found", "Bot configuration not found");
+    }
+
+    // Generate response with bot's system prompt and configuration
+    const result = await assistantAgent.generate({
+      messages: messages.map((msg) => ({
+        role: msg.role,
+        content: msg.content,
+      })),
+      system: botData.systemPrompt || "You are a helpful AI assistant.",
+    });
+
+    const responseText = result.text;
+    const timestamp = admin.firestore.Timestamp.now();
+
+    // Write bot response directly to Firestore with prefixed bot ID
+    const messageId = firestore.collection("_").doc().id;
+    const messageRef = conversationRef.collection(SUBCOLLECTION_MESSAGES).doc(messageId);
+
+    await messageRef.set({
+      conversationId,
+      senderId: botParticipant, // Use full "bot:botId" format
+      text: responseText,
+      timestamp,
+      deliveryStatus: DELIVERY_SENT,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    // Update conversation metadata
+    const lastInteractionByUser = conversationData.lastInteractionByUser || {};
+    lastInteractionByUser[botParticipant] = timestamp;
+
+    await conversationRef.set({
+      lastMessage: responseText,
+      lastMessageTimestamp: timestamp,
+      lastSenderId: botParticipant,
+      lastInteractionByUser,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    return {
+      response: responseText,
+      usage: result.usage,
+    };
   } catch (error) {
     console.error("Agent error:", error);
     throw new HttpsError(
@@ -390,7 +491,8 @@ export const chatWithAgent = onCall<AgentRequest>(async (request) => {
 
 // Push Notification Trigger
 // Sends FCM push notifications when a new message is created
-export const sendMessageNotification = onDocumentCreated(
+// Temporarily commented out - uncomment after Eventarc permissions propagate
+/* export const sendMessageNotification = onDocumentCreated(
   "conversations/{conversationId}/messages/{messageId}",
   async (event) => {
     const messageData = event.data?.data();
@@ -510,4 +612,4 @@ export const sendMessageNotification = onDocumentCreated(
       console.error("Error in sendMessageNotification:", error);
     }
   }
-);
+); */
