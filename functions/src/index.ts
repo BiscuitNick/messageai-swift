@@ -390,7 +390,8 @@ export const chatWithAgent = onCall<AgentRequest>(async (request) => {
 
 // Push Notification Trigger
 // Sends FCM push notifications when a new message is created
-export const sendMessageNotification = onDocumentCreated(
+// Temporarily commented out - uncomment after Eventarc permissions propagate
+/* export const sendMessageNotification = onDocumentCreated(
   "conversations/{conversationId}/messages/{messageId}",
   async (event) => {
     const messageData = event.data?.data();
@@ -510,4 +511,4 @@ export const sendMessageNotification = onDocumentCreated(
       console.error("Error in sendMessageNotification:", error);
     }
   }
-);
+); */
