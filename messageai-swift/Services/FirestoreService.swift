@@ -9,6 +9,7 @@ import Foundation
 import Observation
 import SwiftData
 import FirebaseFirestore
+import FirebaseFunctions
 
 @MainActor
 @Observable
@@ -178,5 +179,41 @@ final class FirestoreService {
         }
 
         try await messageRef.setData(update, merge: true)
+    }
+
+    func chatWithAgent(prompt: String) async throws -> String {
+        let functions = Functions.functions(region: "us-central1")
+        let data: [String: Any] = ["prompt": prompt]
+
+        do {
+            let result = try await functions.httpsCallable("chatWithAgent").call(data)
+            guard let resultData = result.data as? [String: Any],
+                  let response = resultData["response"] as? String else {
+                throw NSError(domain: "FirestoreService", code: -1, userInfo: [
+                    NSLocalizedDescriptionKey: "Invalid response from chatWithAgent"
+                ])
+            }
+            return response
+        } catch {
+            throw error
+        }
+    }
+
+    func ensureBotUserExists() async throws {
+        let botUserId = "messageai-bot"
+        let userRef = db.collection("users").document(botUserId)
+        let snapshot = try await userRef.getDocument()
+
+        if !snapshot.exists {
+            let data: [String: Any] = [
+                "email": "bot@messageai.app",
+                "displayName": "AI Assistant",
+                "isOnline": true,
+                "lastSeen": Timestamp(date: Date()),
+                "createdAt": FieldValue.serverTimestamp(),
+                "updatedAt": FieldValue.serverTimestamp()
+            ]
+            try await userRef.setData(data)
+        }
     }
 }

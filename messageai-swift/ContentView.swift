@@ -66,6 +66,8 @@ struct ContentView: View {
             hasStartedUserListener = true
             await notificationService.requestAuthorization()
             await notificationService.registerForRemoteNotifications()
+            // Ensure bot user exists in Firestore
+            try? await firestoreService.ensureBotUserExists()
             if let userId = authService.currentUser?.id {
                 messagingService.configure(modelContext: modelContext, currentUserId: userId, notificationService: notificationService)
             }

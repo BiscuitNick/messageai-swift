@@ -65,6 +65,7 @@ functions/lib/
 
 # dotenv environment variables file
 .env
+functions/.env.messageai-swif
 
 # dataconnect generated files
 .dataconnect

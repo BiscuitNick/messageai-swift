@@ -608,6 +608,54 @@ final class MessagingService {
         pendingMessageTasks[messageId] = task
     }
 
+    func sendMessageAsBot(conversationId: String, text: String, botUserId: String) async throws {
+        guard let modelContext else {
+            throw MessagingError.dataUnavailable
+        }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let timestamp = Date()
+        let messageId = UUID().uuidString
+
+        let conversationRef = db.collection("conversations").document(conversationId)
+        let messageRef = conversationRef.collection("messages").document(messageId)
+
+        let payload: [String: Any] = [
+            "conversationId": conversationId,
+            "senderId": botUserId,
+            "text": trimmed,
+            "timestamp": Timestamp(date: timestamp),
+            "deliveryStatus": DeliveryStatus.sent.rawValue,
+            "updatedAt": FieldValue.serverTimestamp()
+        ]
+
+        do {
+            try await messageRef.setData(payload)
+
+            // Update conversation metadata
+            let conversationDoc = try await conversationRef.getDocument()
+            var lastInteractionByUser = Self.parseTimestampDictionary(conversationDoc.data()?["lastInteractionByUser"])
+            lastInteractionByUser[botUserId] = timestamp
+
+            var firestoreInteractionMap: [String: Any] = [:]
+            for (userId, date) in lastInteractionByUser {
+                firestoreInteractionMap[userId] = Timestamp(date: date)
+            }
+
+            try await conversationRef.setData([
+                "lastMessage": trimmed,
+                "lastMessageTimestamp": Timestamp(date: timestamp),
+                "lastSenderId": botUserId,
+                "lastInteractionByUser": firestoreInteractionMap,
+                "updatedAt": FieldValue.serverTimestamp()
+            ], merge: true)
+        } catch {
+            debugLog("Failed to send bot message: \(error.localizedDescription)")
+            throw error
+        }
+    }
+
     func ensureMessageListener(for conversationId: String) {
         observeMessages(for: conversationId)
     }

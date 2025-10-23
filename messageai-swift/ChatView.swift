@@ -17,11 +17,16 @@ struct ChatView: View {
     @Environment(MessagingService.self) private var messagingService
     @Environment(AuthService.self) private var authService
     @Environment(NotificationService.self) private var notificationService
+    @Environment(FirestoreService.self) private var firestoreService
 
     @State private var messageText: String = ""
     @State private var sendError: String?
     @State private var isSending: Bool = false
     @FocusState private var composerFocused: Bool
+
+    private var isAIConversation: Bool {
+        conversation.participantIds.contains("messageai-bot")
+    }
 
     @Query private var participants: [UserEntity]
     @Query private var messages: [MessageEntity]
@@ -174,8 +179,30 @@ struct ChatView: View {
             isSending = true
             defer { isSending = false }
             do {
+                // Send user's message
                 try await messagingService.sendMessage(conversationId: conversationId, text: content)
                 messageText = ""
+
+                // If this is an AI conversation, get AI response
+                if isAIConversation {
+                    do {
+                        let aiResponse = try await firestoreService.chatWithAgent(prompt: content)
+                        // Send AI response as message from bot
+                        try await messagingService.sendMessageAsBot(
+                            conversationId: conversationId,
+                            text: aiResponse,
+                            botUserId: "messageai-bot"
+                        )
+                    } catch {
+                        // If AI fails, send error message as bot
+                        let errorMsg = "Sorry, I encountered an error: \(error.localizedDescription)"
+                        try? await messagingService.sendMessageAsBot(
+                            conversationId: conversationId,
+                            text: errorMsg,
+                            botUserId: "messageai-bot"
+                        )
+                    }
+                }
             } catch {
                 sendError = error.localizedDescription
             }
