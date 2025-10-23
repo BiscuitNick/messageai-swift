@@ -32,6 +32,7 @@ final class MessagingService {
     private let botUserId = "messageai-bot"
     private var notificationService: NotificationService?
     private var isAppInForeground: Bool = true
+    private var notifiedMessageIds: Set<String> = []
 
     init(db: Firestore = Firestore.firestore()) {
         self.db = db
@@ -55,6 +56,7 @@ final class MessagingService {
         messageListeners.removeAll()
         pendingMessageTasks.values.forEach { $0.cancel() }
         pendingMessageTasks.removeAll()
+        notifiedMessageIds.removeAll()
         currentUserId = nil
     }
 
@@ -859,13 +861,19 @@ final class MessagingService {
         // Handle notifications for new messages
         for change in snapshot.documentChanges {
             let data = change.document.data()
+            let messageId = change.document.documentID
+
             guard
                 let senderId = data["senderId"] as? String,
                 let text = data["text"] as? String,
                 let currentUserId,
                 change.type == .added,
-                senderId != currentUserId
+                senderId != currentUserId,
+                !notifiedMessageIds.contains(messageId) // Prevent duplicate notifications
             else { continue }
+
+            // Mark this message as notified
+            notifiedMessageIds.insert(messageId)
 
             // Trigger notification for new message
             if let notificationService {
