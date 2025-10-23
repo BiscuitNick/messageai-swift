@@ -47,7 +47,9 @@ final class ConversationEntity {
     var adminIdsData: Data
     var lastMessage: String?
     var lastMessageTimestamp: Date?
+    var lastSenderId: String?
     var unreadCountData: Data
+    var lastInteractionByUserData: Data = LocalJSONCoder.encode([String: Date]())
     var createdAt: Date
     var updatedAt: Date
 
@@ -60,7 +62,9 @@ final class ConversationEntity {
         adminIds: [String] = [],
         lastMessage: String? = nil,
         lastMessageTimestamp: Date? = nil,
+        lastSenderId: String? = nil,
         unreadCount: [String: Int] = [:],
+        lastInteractionByUser: [String: Date] = [:],
         createdAt: Date = .init(),
         updatedAt: Date = .init()
     ) {
@@ -72,7 +76,9 @@ final class ConversationEntity {
         self.adminIdsData = LocalJSONCoder.encode(adminIds)
         self.lastMessage = lastMessage
         self.lastMessageTimestamp = lastMessageTimestamp
+        self.lastSenderId = lastSenderId
         self.unreadCountData = LocalJSONCoder.encode(unreadCount)
+        self.lastInteractionByUserData = LocalJSONCoder.encode(lastInteractionByUser)
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -90,6 +96,11 @@ final class ConversationEntity {
     var unreadCount: [String: Int] {
         get { LocalJSONCoder.decode(unreadCountData, fallback: [:]) }
         set { unreadCountData = LocalJSONCoder.encode(newValue) }
+    }
+
+    var lastInteractionByUser: [String: Date] {
+        get { LocalJSONCoder.decode(lastInteractionByUserData, fallback: [:]) }
+        set { lastInteractionByUserData = LocalJSONCoder.encode(newValue) }
     }
 }
 
@@ -111,7 +122,7 @@ final class MessageEntity {
         text: String,
         timestamp: Date = .init(),
         deliveryStatus: DeliveryStatus = .sending,
-        readBy: [String] = [],
+        readReceipts: [String: Date] = [:],
         updatedAt: Date = .init()
     ) {
         self.id = id
@@ -120,7 +131,7 @@ final class MessageEntity {
         self.text = text
         self.timestamp = timestamp
         self.deliveryStatusRawValue = deliveryStatus.rawValue
-        self.readByData = LocalJSONCoder.encode(readBy)
+        self.readByData = LocalJSONCoder.encode(readReceipts)
         self.updatedAt = updatedAt
     }
 
@@ -129,9 +140,33 @@ final class MessageEntity {
         set { deliveryStatusRawValue = newValue.rawValue }
     }
 
+    var readReceipts: [String: Date] {
+        get {
+            if let map = try? LocalJSONCoder.decoder.decode([String: Date].self, from: readByData) {
+                return map
+            }
+            if let array = try? LocalJSONCoder.decoder.decode([String].self, from: readByData) {
+                let fallbackDate = Date.distantPast
+                return Dictionary(uniqueKeysWithValues: array.map { ($0, fallbackDate) })
+            }
+            return [:]
+        }
+        set {
+            readByData = LocalJSONCoder.encode(newValue)
+        }
+    }
+
     var readBy: [String] {
-        get { LocalJSONCoder.decode(readByData, fallback: []) }
-        set { readByData = LocalJSONCoder.encode(newValue) }
+        get { Array(readReceipts.keys) }
+        set {
+            let current = readReceipts
+            var updated: [String: Date] = [:]
+            let now = Date()
+            for userId in newValue {
+                updated[userId] = current[userId] ?? now
+            }
+            readReceipts = updated
+        }
     }
 }
 

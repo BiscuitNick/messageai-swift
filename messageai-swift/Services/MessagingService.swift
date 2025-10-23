@@ -92,7 +92,8 @@ final class MessagingService {
             "adminIds": [currentUserId],
             "createdAt": FieldValue.serverTimestamp(),
             "updatedAt": FieldValue.serverTimestamp(),
-            "unreadCount": Dictionary(uniqueKeysWithValues: participantSet.map { ($0, 0) })
+            "unreadCount": Dictionary(uniqueKeysWithValues: participantSet.map { ($0, 0) }),
+            "lastInteractionByUser": Dictionary(uniqueKeysWithValues: participantSet.map { ($0, Timestamp(date: now)) })
         ]
 
         let trimmedGroupName = groupName?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -121,7 +122,9 @@ final class MessagingService {
                 adminIds: [currentUserId],
                 lastMessage: nil,
                 lastMessageTimestamp: nil,
+                lastSenderId: nil,
                 unreadCount: Dictionary(uniqueKeysWithValues: participantSet.map { ($0, 0) }),
+                lastInteractionByUser: Dictionary(uniqueKeysWithValues: participantSet.map { ($0, now) }),
                 createdAt: now,
                 updatedAt: now
             )
@@ -195,9 +198,11 @@ final class MessagingService {
         let groupPictureURL = data["groupPictureURL"] as? String
         let lastMessage = data["lastMessage"] as? String
         let lastTimestamp = (data["lastMessageTimestamp"] as? Timestamp)?.dateValue()
+        let lastSenderId = data["lastSenderId"] as? String
         let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
         let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
         let unreadCount = parseUnreadCount(data["unreadCount"], participants: resolvedParticipants)
+        let lastInteractionByUser = Self.parseTimestampDictionary(data["lastInteractionByUser"])
 
         try upsertLocalConversation(
             id: id,
@@ -208,7 +213,9 @@ final class MessagingService {
             adminIds: resolvedAdminIds,
             lastMessage: lastMessage,
             lastMessageTimestamp: lastTimestamp,
+            lastSenderId: lastSenderId,
             unreadCount: unreadCount,
+            lastInteractionByUser: lastInteractionByUser,
             createdAt: createdAt,
             updatedAt: updatedAt
         )
@@ -277,7 +284,12 @@ final class MessagingService {
                 "updatedAt": FieldValue.serverTimestamp(),
                 "lastMessage": welcomeText,
                 "lastMessageTimestamp": Timestamp(date: now),
-                "unreadCount": unreadCount
+                "lastSenderId": botUserId,
+                "unreadCount": unreadCount,
+                "lastInteractionByUser": [
+                    currentUserId: Timestamp(date: now),
+                    botUserId: Timestamp(date: now)
+                ]
             ])
 
             let messageRef = conversationRef.collection("messages").document("bot-intro")
@@ -287,7 +299,6 @@ final class MessagingService {
                 "text": welcomeText,
                 "timestamp": Timestamp(date: now),
                 "deliveryStatus": DeliveryStatus.delivered.rawValue,
-                "readBy": [botUserId],
                 "updatedAt": FieldValue.serverTimestamp()
             ])
 
@@ -297,9 +308,17 @@ final class MessagingService {
         let conversationData = conversationDoc.data() ?? [:]
         let lastMessage = conversationData["lastMessage"] as? String ?? welcomeText
         let lastMessageTimestamp = (conversationData["lastMessageTimestamp"] as? Timestamp)?.dateValue() ?? now
+        let lastSenderId = conversationData["lastSenderId"] as? String
         let unread = conversationData["unreadCount"] as? [String: Int] ?? unreadCount
         let createdAt = (conversationData["createdAt"] as? Timestamp)?.dateValue() ?? now
         let updatedAt = (conversationData["updatedAt"] as? Timestamp)?.dateValue() ?? now
+        var lastInteractionByUser = Self.parseTimestampDictionary(conversationData["lastInteractionByUser"])
+        if lastInteractionByUser[currentUserId] == nil {
+            lastInteractionByUser[currentUserId] = now
+        }
+        if lastInteractionByUser[botUserId] == nil {
+            lastInteractionByUser[botUserId] = now
+        }
 
         try upsertLocalUser(
             id: botUserId,
@@ -320,7 +339,9 @@ final class MessagingService {
             adminIds: [currentUserId],
             lastMessage: lastMessage,
             lastMessageTimestamp: lastMessageTimestamp,
+            lastSenderId: lastSenderId,
             unreadCount: unread,
+            lastInteractionByUser: lastInteractionByUser,
             createdAt: createdAt,
             updatedAt: updatedAt
         )
@@ -334,7 +355,6 @@ final class MessagingService {
                 "text": welcomeText,
                 "timestamp": Timestamp(date: now),
                 "deliveryStatus": DeliveryStatus.delivered.rawValue,
-                "readBy": [botUserId],
                 "updatedAt": FieldValue.serverTimestamp()
             ])
             messageDoc = try await messageRef.getDocument()
@@ -346,7 +366,11 @@ final class MessagingService {
         let messageSenderId = messageData["senderId"] as? String ?? botUserId
         let messageStatusRaw = messageData["deliveryStatus"] as? String ?? DeliveryStatus.delivered.rawValue
         let messageStatus = DeliveryStatus(rawValue: messageStatusRaw) ?? .delivered
-        let messageReadBy = messageData["readBy"] as? [String] ?? [botUserId]
+        let messageReadReceipts = Self.parseReadReceipts(
+            from: messageData,
+            fallbackTimestamp: messageTimestamp,
+            defaultReader: botUserId
+        )
 
         try upsertLocalMessage(
             id: "bot-intro",
@@ -355,7 +379,7 @@ final class MessagingService {
             text: messageText,
             timestamp: messageTimestamp,
             deliveryStatus: messageStatus,
-            readBy: messageReadBy
+            readReceipts: messageReadReceipts
         )
 
         observeMessages(for: conversationId)
@@ -414,7 +438,12 @@ final class MessagingService {
                 "updatedAt": FieldValue.serverTimestamp(),
                 "lastMessage": demoMessageText,
                 "lastMessageTimestamp": Timestamp(date: now),
-                "unreadCount": demoUnread
+                "lastSenderId": primarySample.id,
+                "unreadCount": demoUnread,
+                "lastInteractionByUser": [
+                    currentUserId: Timestamp(date: now),
+                    primarySample.id: Timestamp(date: now)
+                ]
             ])
 
             let messageRef = demoConversationRef.collection("messages").document("demo-intro")
@@ -424,7 +453,6 @@ final class MessagingService {
                 "text": demoMessageText,
                 "timestamp": Timestamp(date: now),
                 "deliveryStatus": DeliveryStatus.delivered.rawValue,
-                "readBy": [primarySample.id],
                 "updatedAt": FieldValue.serverTimestamp()
             ])
 
@@ -434,9 +462,17 @@ final class MessagingService {
         let demoData = demoConversationDoc.data() ?? [:]
         let demoLastMessage = demoData["lastMessage"] as? String ?? demoMessageText
         let demoLastTimestamp = (demoData["lastMessageTimestamp"] as? Timestamp)?.dateValue() ?? now
+        let demoLastSenderId = demoData["lastSenderId"] as? String
         let demoUnreadCount = demoData["unreadCount"] as? [String: Int] ?? demoUnread
         let demoCreatedAt = (demoData["createdAt"] as? Timestamp)?.dateValue() ?? now
         let demoUpdatedAt = (demoData["updatedAt"] as? Timestamp)?.dateValue() ?? now
+        var demoLastInteractionByUser = Self.parseTimestampDictionary(demoData["lastInteractionByUser"])
+        if demoLastInteractionByUser[currentUserId] == nil {
+            demoLastInteractionByUser[currentUserId] = now
+        }
+        if demoLastInteractionByUser[primarySample.id] == nil {
+            demoLastInteractionByUser[primarySample.id] = now
+        }
 
         try upsertLocalConversation(
             id: demoConversationId,
@@ -447,7 +483,9 @@ final class MessagingService {
             adminIds: [currentUserId],
             lastMessage: demoLastMessage,
             lastMessageTimestamp: demoLastTimestamp,
+            lastSenderId: demoLastSenderId,
             unreadCount: demoUnreadCount,
+            lastInteractionByUser: demoLastInteractionByUser,
             createdAt: demoCreatedAt,
             updatedAt: demoUpdatedAt
         )
@@ -461,7 +499,6 @@ final class MessagingService {
                 "text": demoMessageText,
                 "timestamp": Timestamp(date: now),
                 "deliveryStatus": DeliveryStatus.delivered.rawValue,
-                "readBy": [primarySample.id],
                 "updatedAt": FieldValue.serverTimestamp()
             ])
             demoMessageDoc = try await demoMessageRef.getDocument()
@@ -472,7 +509,11 @@ final class MessagingService {
         let demoMessageSender = demoMessageData["senderId"] as? String ?? primarySample.id
         let demoMessageStatusRaw = demoMessageData["deliveryStatus"] as? String ?? DeliveryStatus.delivered.rawValue
         let demoMessageStatus = DeliveryStatus(rawValue: demoMessageStatusRaw) ?? .delivered
-        let demoMessageReadBy = demoMessageData["readBy"] as? [String] ?? [primarySample.id]
+        let demoMessageReadReceipts = Self.parseReadReceipts(
+            from: demoMessageData,
+            fallbackTimestamp: demoMessageTimestamp,
+            defaultReader: primarySample.id
+        )
         let demoMessageBody = demoMessageData["text"] as? String ?? demoMessageText
 
         try upsertLocalMessage(
@@ -482,7 +523,7 @@ final class MessagingService {
             text: demoMessageBody,
             timestamp: demoMessageTimestamp,
             deliveryStatus: demoMessageStatus,
-            readBy: demoMessageReadBy
+            readReceipts: demoMessageReadReceipts
         )
 
         observeMessages(for: demoConversationId)
@@ -504,7 +545,7 @@ final class MessagingService {
             text: trimmed,
             timestamp: timestamp,
             deliveryStatus: .sending,
-            readBy: [currentUserId],
+            readReceipts: [:],
             updatedAt: timestamp
         )
 
@@ -520,18 +561,34 @@ final class MessagingService {
             "text": trimmed,
             "timestamp": Timestamp(date: timestamp),
             "deliveryStatus": DeliveryStatus.sent.rawValue,
-            "readBy": [currentUserId],
             "updatedAt": FieldValue.serverTimestamp()
         ]
 
         let task = Task { [weak self] in
             do {
                 try await messageRef.setData(payload)
+
+                // Get current conversation to update lastInteractionByUser
+                let conversationDoc = try await conversationRef.getDocument()
+                var lastInteractionByUser = Self.parseTimestampDictionary(conversationDoc.data()?["lastInteractionByUser"])
+                lastInteractionByUser[currentUserId] = timestamp
+
+                // Convert to Firestore format
+                var firestoreInteractionMap: [String: Any] = [:]
+                for (userId, date) in lastInteractionByUser {
+                    firestoreInteractionMap[userId] = Timestamp(date: date)
+                }
+
                 try await conversationRef.setData([
                     "lastMessage": trimmed,
                     "lastMessageTimestamp": Timestamp(date: timestamp),
+                    "lastSenderId": currentUserId,
+                    "lastInteractionByUser": firestoreInteractionMap,
                     "updatedAt": FieldValue.serverTimestamp()
                 ], merge: true)
+
+                // Update local conversation's lastInteractionByUser for sender
+                await self?.updateLocalSenderInteraction(conversationId: conversationId, userId: currentUserId, timestamp: timestamp, lastMessage: trimmed)
 
                 try await self?.markMessageAsSent(messageId: messageId)
             } catch {
@@ -549,6 +606,8 @@ final class MessagingService {
     func markConversationAsRead(_ conversationId: String) async {
         guard let modelContext, let currentUserId else { return }
 
+        let now = Date()
+
         var descriptor = FetchDescriptor<ConversationEntity>(
             predicate: #Predicate<ConversationEntity> { conversation in
                 conversation.id == conversationId
@@ -557,23 +616,39 @@ final class MessagingService {
         descriptor.fetchLimit = 1
 
         if let conversation = try? modelContext.fetch(descriptor).first {
-            var unread = conversation.unreadCount
-            unread[currentUserId] = 0
-            conversation.unreadCount = unread
-            conversation.updatedAt = Date()
-            try? modelContext.save()
-        }
+            // Only update if there are new messages to mark as read
+            let lastMessageTime = conversation.lastMessageTimestamp ?? .distantPast
+            let currentInteractionTime = conversation.lastInteractionByUser[currentUserId] ?? .distantPast
 
-        do {
-            try await db.collection("conversations").document(conversationId).setData([
-                "unreadCount.\(currentUserId)": 0,
-                "updatedAt": FieldValue.serverTimestamp()
-            ], merge: true)
-        } catch {
-            debugLog("Failed to update unread state: \(error.localizedDescription)")
-        }
+            if lastMessageTime > currentInteractionTime {
+                var unread = conversation.unreadCount
+                unread[currentUserId] = 0
+                conversation.unreadCount = unread
 
-        await markMessagesAsRead(for: conversationId, userId: currentUserId)
+                var lastInteraction = conversation.lastInteractionByUser
+                lastInteraction[currentUserId] = now
+                conversation.lastInteractionByUser = lastInteraction
+
+                conversation.updatedAt = now
+                try? modelContext.save()
+
+                // Get the full map to update in Firestore
+                var firestoreInteractionMap: [String: Any] = [:]
+                for (userId, date) in lastInteraction {
+                    firestoreInteractionMap[userId] = Timestamp(date: date)
+                }
+
+                do {
+                    try await db.collection("conversations").document(conversationId).setData([
+                        "unreadCount.\(currentUserId)": 0,
+                        "lastInteractionByUser": firestoreInteractionMap,
+                        "updatedAt": FieldValue.serverTimestamp()
+                    ], merge: true)
+                } catch {
+                    debugLog("Failed to update unread state: \(error.localizedDescription)")
+                }
+            }
+        }
     }
 
     private func observeConversations(for userId: String) {
@@ -635,11 +710,13 @@ final class MessagingService {
             let conversationId = change.document.documentID
             let lastMessage = data["lastMessage"] as? String
             let lastTimestamp = (data["lastMessageTimestamp"] as? Timestamp)?.dateValue()
+            let lastSenderId = data["lastSenderId"] as? String
             let unreadCount = data["unreadCount"] as? [String: Int] ?? [:]
             let groupName = data["groupName"] as? String
             let groupPictureURL = data["groupPictureURL"] as? String
             let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
             let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
+            let lastInteractionByUser = Self.parseTimestampDictionary(data["lastInteractionByUser"])
 
             var descriptor = FetchDescriptor<ConversationEntity>(
                 predicate: #Predicate<ConversationEntity> { conversation in
@@ -656,9 +733,13 @@ final class MessagingService {
                     existing.adminIds = adminIds
                     existing.lastMessage = lastMessage
                     existing.lastMessageTimestamp = lastTimestamp
+                    existing.lastSenderId = lastSenderId
                     existing.unreadCount = unreadCount
                     existing.groupName = groupName
                     existing.groupPictureURL = groupPictureURL
+                    if !lastInteractionByUser.isEmpty {
+                        existing.lastInteractionByUser = lastInteractionByUser
+                    }
                     existing.updatedAt = updatedAt
                 } else {
                     let conversation = ConversationEntity(
@@ -670,7 +751,9 @@ final class MessagingService {
                         adminIds: adminIds,
                         lastMessage: lastMessage,
                         lastMessageTimestamp: lastTimestamp,
+                        lastSenderId: lastSenderId,
                         unreadCount: unreadCount,
+                        lastInteractionByUser: lastInteractionByUser,
                         createdAt: createdAt,
                         updatedAt: updatedAt
                     )
@@ -713,7 +796,11 @@ final class MessagingService {
             let messageId = change.document.documentID
             let timestamp = (data["timestamp"] as? Timestamp)?.dateValue() ?? Date()
             let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
-            let readBy = data["readBy"] as? [String] ?? []
+            let readReceipts = Self.parseReadReceipts(
+                from: data,
+                fallbackTimestamp: timestamp,
+                defaultReader: senderId
+            )
             let status = DeliveryStatus(rawValue: statusRaw) ?? .sent
             let shouldMarkDelivered: Bool = {
                 guard let currentUserId else { return false }
@@ -734,7 +821,7 @@ final class MessagingService {
                     existing.text = text
                     existing.timestamp = timestamp
                     existing.deliveryStatus = finalStatus
-                    existing.readBy = readBy
+                    existing.readReceipts = readReceipts
                     existing.updatedAt = updatedAt
                 } else {
                     let message = MessageEntity(
@@ -744,7 +831,7 @@ final class MessagingService {
                         text: text,
                         timestamp: timestamp,
                         deliveryStatus: finalStatus,
-                        readBy: readBy,
+                        readReceipts: readReceipts,
                         updatedAt: updatedAt
                     )
                     modelContext.insert(message)
@@ -790,6 +877,28 @@ final class MessagingService {
         }
     }
 
+    private func updateLocalSenderInteraction(conversationId: String, userId: String, timestamp: Date, lastMessage: String) async {
+        guard let modelContext else { return }
+
+        var descriptor = FetchDescriptor<ConversationEntity>(
+            predicate: #Predicate<ConversationEntity> { conversation in
+                conversation.id == conversationId
+            }
+        )
+        descriptor.fetchLimit = 1
+
+        if let conversation = try? modelContext.fetch(descriptor).first {
+            var interactions = conversation.lastInteractionByUser
+            interactions[userId] = timestamp
+            conversation.lastInteractionByUser = interactions
+            conversation.lastSenderId = userId
+            conversation.lastMessage = lastMessage
+            conversation.lastMessageTimestamp = timestamp
+            conversation.updatedAt = Date()
+            try? modelContext.save()
+        }
+    }
+
     private func markMessageAsSent(messageId: String) async throws {
         guard let modelContext else { return }
         var descriptor = FetchDescriptor<MessageEntity>(
@@ -826,55 +935,6 @@ final class MessagingService {
         pendingMessageTasks.removeValue(forKey: messageId)
     }
 
-    private func markMessagesAsRead(for conversationId: String, userId: String) async {
-        guard let modelContext else { return }
-
-        let readStatus = DeliveryStatus.read.rawValue
-        var descriptor = FetchDescriptor<MessageEntity>(
-            predicate: #Predicate<MessageEntity> { message in
-                message.conversationId == conversationId &&
-                message.senderId != userId &&
-                message.deliveryStatusRawValue != readStatus
-            }
-        )
-
-        let unreadMessages = (try? modelContext.fetch(descriptor)) ?? []
-
-        guard !unreadMessages.isEmpty else { return }
-
-        for message in unreadMessages {
-            message.deliveryStatus = .read
-            if !message.readBy.contains(userId) {
-                var updatedReadBy = message.readBy
-                updatedReadBy.append(userId)
-                message.readBy = updatedReadBy
-            }
-            message.updatedAt = Date()
-        }
-
-        do {
-            try modelContext.save()
-        } catch {
-            debugLog("Failed to save read state locally: \(error.localizedDescription)")
-        }
-
-        for message in unreadMessages {
-            let messageRef = db.collection("conversations")
-                .document(conversationId)
-                .collection("messages")
-                .document(message.id)
-
-            do {
-                try await messageRef.setData([
-                    "deliveryStatus": DeliveryStatus.read.rawValue,
-                    "readBy": FieldValue.arrayUnion([userId]),
-                    "updatedAt": FieldValue.serverTimestamp()
-                ], merge: true)
-            } catch {
-                debugLog("Failed to sync read receipt: \(error.localizedDescription)")
-            }
-        }
-    }
 
     private func upsertLocalUser(
         id: String,
@@ -925,7 +985,9 @@ final class MessagingService {
         adminIds: [String],
         lastMessage: String?,
         lastMessageTimestamp: Date?,
+        lastSenderId: String?,
         unreadCount: [String: Int],
+        lastInteractionByUser: [String: Date],
         createdAt: Date,
         updatedAt: Date
     ) throws {
@@ -946,7 +1008,11 @@ final class MessagingService {
             existing.adminIds = adminIds
             existing.lastMessage = lastMessage
             existing.lastMessageTimestamp = lastMessageTimestamp
+            existing.lastSenderId = lastSenderId
             existing.unreadCount = unreadCount
+            if !lastInteractionByUser.isEmpty {
+                existing.lastInteractionByUser = lastInteractionByUser
+            }
             existing.createdAt = createdAt
             existing.updatedAt = updatedAt
         } else {
@@ -959,7 +1025,9 @@ final class MessagingService {
                 adminIds: adminIds,
                 lastMessage: lastMessage,
                 lastMessageTimestamp: lastMessageTimestamp,
+                lastSenderId: lastSenderId,
                 unreadCount: unreadCount,
+                lastInteractionByUser: lastInteractionByUser,
                 createdAt: createdAt,
                 updatedAt: updatedAt
             )
@@ -976,7 +1044,7 @@ final class MessagingService {
         text: String,
         timestamp: Date,
         deliveryStatus: DeliveryStatus,
-        readBy: [String]
+        readReceipts: [String: Date]
     ) throws {
         guard let modelContext else { return }
 
@@ -993,7 +1061,7 @@ final class MessagingService {
             existing.text = text
             existing.timestamp = timestamp
             existing.deliveryStatus = deliveryStatus
-            existing.readBy = readBy
+            existing.readReceipts = readReceipts
             existing.updatedAt = timestamp
         } else {
             let message = MessageEntity(
@@ -1003,7 +1071,7 @@ final class MessagingService {
                 text: text,
                 timestamp: timestamp,
                 deliveryStatus: deliveryStatus,
-                readBy: readBy,
+                readReceipts: readReceipts,
                 updatedAt: timestamp
             )
             modelContext.insert(message)
@@ -1016,6 +1084,51 @@ final class MessagingService {
         #if DEBUG
         print("[MessagingService]", message)
         #endif
+    }
+
+    private static func parseReadReceipts(
+        from data: [String: Any],
+        fallbackTimestamp: Date,
+        defaultReader: String? = nil
+    ) -> [String: Date] {
+        var receipts: [String: Date] = [:]
+
+        if let map = data["readReceipts"] as? [String: Any] {
+            for (userId, value) in map {
+                if let timestamp = value as? Timestamp {
+                    receipts[userId] = timestamp.dateValue()
+                } else if let date = value as? Date {
+                    receipts[userId] = date
+                }
+            }
+        }
+
+        if receipts.isEmpty, let readBy = data["readBy"] as? [String] {
+            for userId in readBy {
+                receipts[userId] = fallbackTimestamp
+            }
+        }
+
+        if receipts.isEmpty, let defaultReader {
+            receipts[defaultReader] = fallbackTimestamp
+        }
+
+        return receipts
+    }
+
+    private static func parseTimestampDictionary(_ value: Any?) -> [String: Date] {
+        guard let map = value as? [String: Any] else { return [:] }
+        var result: [String: Date] = [:]
+
+        for (userId, raw) in map {
+            if let timestamp = raw as? Timestamp {
+                result[userId] = timestamp.dateValue()
+            } else if let date = raw as? Date {
+                result[userId] = date
+            }
+        }
+
+        return result
     }
 }
 

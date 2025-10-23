@@ -2,12 +2,20 @@ import * as admin from "firebase-admin";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 import type { CallableRequest } from "firebase-functions/v2/https";
 import { setGlobalOptions } from "firebase-functions/v2/options";
+import { Experimental_Agent as Agent } from "ai";
+import { createOpenAI } from "@ai-sdk/openai";
+import { tool } from "ai";
+import { z } from "zod";
+import { defineString } from "firebase-functions/params";
 
 if (!admin.apps.length) {
   admin.initializeApp();
 }
 
 setGlobalOptions({ region: "us-central1" });
+
+// Define OpenAI API key as an environment parameter
+const openaiApiKey = defineString("OPENAI_API_KEY");
 
 const firestore = admin.firestore();
 
@@ -265,3 +273,116 @@ function requireAuth<T>(request: CallableRequest<T>): string {
   }
   return uid;
 }
+
+// AI Agent Configuration
+// API key is read from environment variable OPENAI_API_KEY
+// For local dev: Add OPENAI_API_KEY to .env file
+// For production: Set via Firebase console or deployment
+const openai = createOpenAI({
+  apiKey: openaiApiKey.value(),
+});
+
+const assistantAgent = new Agent({
+  model: openai("gpt-4o-mini"),
+  system: `You are a helpful assistant integrated into a messaging application.
+Your role is to help users with various tasks including:
+- Answering questions
+- Providing recommendations
+- Drafting messages
+- Summarizing conversations
+- General assistance
+
+Always be concise, friendly, and helpful. Keep responses brief unless detailed information is requested.`,
+  tools: {
+    getCurrentTime: tool({
+      description: "Get the current date and time",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const now = new Date();
+        return {
+          timestamp: now.toISOString(),
+          formatted: now.toLocaleString("en-US", {
+            weekday: "long",
+            year: "numeric",
+            month: "long",
+            day: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+          }),
+        };
+      },
+    }),
+    draftMessage: tool({
+      description: "Draft a message based on user requirements",
+      inputSchema: z.object({
+        tone: z.enum(["professional", "casual", "friendly", "formal"]).describe("The tone of the message"),
+        purpose: z.string().describe("The purpose or topic of the message"),
+        length: z.enum(["short", "medium", "long"]).optional().describe("Desired message length"),
+      }),
+      execute: async ({ tone, purpose, length = "medium" }) => {
+        return {
+          suggestion: `I'll help you draft a ${tone} message about ${purpose}. Length preference: ${length}`,
+          tone,
+          purpose,
+        };
+      },
+    }),
+  },
+});
+
+type AgentMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+type AgentRequest = {
+  messages: AgentMessage[];
+  prompt?: string;
+};
+
+export const chatWithAgent = onCall<AgentRequest>(async (request) => {
+  requireAuth(request);
+
+  const { messages = [], prompt } = request.data;
+
+  if (!prompt && messages.length === 0) {
+    throw new HttpsError(
+      "invalid-argument",
+      "Either 'prompt' or 'messages' must be provided"
+    );
+  }
+
+  try {
+    let result;
+
+    if (prompt) {
+      result = await assistantAgent.generate({
+        prompt: prompt,
+      });
+
+      return {
+        response: result.text,
+        usage: result.usage,
+      };
+    } else {
+      result = await assistantAgent.generate({
+        messages: messages.map((msg) => ({
+          role: msg.role,
+          content: msg.content,
+        })),
+      });
+
+      return {
+        response: result.text,
+        usage: result.usage,
+      };
+    }
+  } catch (error) {
+    console.error("Agent error:", error);
+    throw new HttpsError(
+      "internal",
+      "Failed to process agent request",
+      error
+    );
+  }
+});

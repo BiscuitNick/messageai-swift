@@ -173,6 +173,7 @@ final class FirestoreService {
         ]
 
         if status == .read {
+            update["readReceipts.\(userId)"] = FieldValue.serverTimestamp()
             update["readBy"] = FieldValue.arrayUnion([userId])
         }
 
