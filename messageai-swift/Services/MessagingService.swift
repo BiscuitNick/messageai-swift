@@ -11,6 +11,16 @@ import SwiftData
 import FirebaseFirestore
 import FirebaseAuth
 
+// MARK: - Message Observer Protocol
+
+@MainActor
+protocol MessageObserver: AnyObject {
+    func didAddMessage(messageId: String, conversationId: String, senderId: String, text: String)
+    func didUpdateMessage(messageId: String, conversationId: String)
+    func didDeleteMessage(messageId: String, conversationId: String)
+    func didUpdateConversation(conversationId: String)
+}
+
 @MainActor
 @Observable
 final class MessagingService {
@@ -33,6 +43,9 @@ final class MessagingService {
     private let botUserId = "dash-bot"  // Legacy bot user ID
     private var notificationService: NotificationService?
     private var isAppInForeground: Bool = true
+
+    // Observer management
+    private var observers: [WeakMessageObserver] = []
 
     init(db: Firestore = Firestore.firestore()) {
         self.db = db
@@ -904,6 +917,11 @@ final class MessagingService {
                         existing.lastInteractionByUser = lastInteractionByUser
                     }
                     existing.updatedAt = updatedAt
+
+                    // Notify observers about conversation update
+                    if change.type == .modified {
+                        notifyObserversConversationUpdated(conversationId: conversationId)
+                    }
                 } else {
                     let conversation = ConversationEntity(
                         id: conversationId,
@@ -980,7 +998,7 @@ final class MessagingService {
             descriptor.fetchLimit = 1
 
             switch change.type {
-            case .added, .modified:
+            case .added:
                 if let existing = try? modelContext.fetch(descriptor).first {
                     existing.text = text
                     existing.timestamp = timestamp
@@ -999,10 +1017,32 @@ final class MessagingService {
                         updatedAt: updatedAt
                     )
                     modelContext.insert(message)
+
+                    // Notify observers about the new message
+                    notifyObserversMessageAdded(
+                        messageId: messageId,
+                        conversationId: conversationId,
+                        senderId: senderId,
+                        text: text
+                    )
+                }
+            case .modified:
+                if let existing = try? modelContext.fetch(descriptor).first {
+                    existing.text = text
+                    existing.timestamp = timestamp
+                    existing.deliveryStatus = finalStatus
+                    existing.readReceipts = readReceipts
+                    existing.updatedAt = updatedAt
+
+                    // Notify observers about the update
+                    notifyObserversMessageUpdated(messageId: messageId, conversationId: conversationId)
                 }
             case .removed:
                 if let existing = try? modelContext.fetch(descriptor).first {
                     modelContext.delete(existing)
+
+                    // Notify observers about the deletion
+                    notifyObserversMessageDeleted(messageId: messageId, conversationId: conversationId)
                 }
             }
         }
@@ -1371,6 +1411,72 @@ final class MessagingService {
         }
 
         return result
+    }
+
+    // MARK: - Observer Management
+
+    func addObserver(_ observer: MessageObserver) {
+        // Remove nil references
+        observers.removeAll { $0.observer == nil }
+
+        // Check if already added
+        if observers.contains(where: { $0.observer === observer }) {
+            return
+        }
+
+        observers.append(WeakMessageObserver(observer: observer))
+        debugLog("Observer added. Total observers: \(observers.count)")
+    }
+
+    func removeObserver(_ observer: MessageObserver) {
+        observers.removeAll { $0.observer == nil || $0.observer === observer }
+        debugLog("Observer removed. Total observers: \(observers.count)")
+    }
+
+    private func notifyObserversMessageAdded(messageId: String, conversationId: String, senderId: String, text: String) {
+        // Clean up nil references
+        observers.removeAll { $0.observer == nil }
+
+        // Notify all observers
+        for weakObserver in observers {
+            weakObserver.observer?.didAddMessage(
+                messageId: messageId,
+                conversationId: conversationId,
+                senderId: senderId,
+                text: text
+            )
+        }
+    }
+
+    private func notifyObserversMessageUpdated(messageId: String, conversationId: String) {
+        observers.removeAll { $0.observer == nil }
+        for weakObserver in observers {
+            weakObserver.observer?.didUpdateMessage(messageId: messageId, conversationId: conversationId)
+        }
+    }
+
+    private func notifyObserversMessageDeleted(messageId: String, conversationId: String) {
+        observers.removeAll { $0.observer == nil }
+        for weakObserver in observers {
+            weakObserver.observer?.didDeleteMessage(messageId: messageId, conversationId: conversationId)
+        }
+    }
+
+    private func notifyObserversConversationUpdated(conversationId: String) {
+        observers.removeAll { $0.observer == nil }
+        for weakObserver in observers {
+            weakObserver.observer?.didUpdateConversation(conversationId: conversationId)
+        }
+    }
+}
+
+// MARK: - Weak Observer Wrapper
+
+private class WeakMessageObserver {
+    weak var observer: MessageObserver?
+
+    init(observer: MessageObserver) {
+        self.observer = observer
     }
 }
 

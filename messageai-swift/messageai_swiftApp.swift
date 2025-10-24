@@ -19,12 +19,14 @@ struct messageai_swiftApp: App {
     @State private var messagingService: MessagingService
     @State private var notificationService: NotificationService
     @State private var networkMonitor: NetworkMonitor
+    @State private var aiFeaturesService: AIFeaturesService
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
             UserEntity.self,
             BotEntity.self,
             ConversationEntity.self,
             MessageEntity.self,
+            ThreadSummaryEntity.self,
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
@@ -40,11 +42,14 @@ struct messageai_swiftApp: App {
         let firestore = FirestoreService()
         let notification = NotificationService()
         notification.configure()
+        let messaging = MessagingService()
+        let aiFeatures = AIFeaturesService()
         _firestoreService = State(wrappedValue: firestore)
         _authService = State(wrappedValue: AuthService())
-        _messagingService = State(wrappedValue: MessagingService())
+        _messagingService = State(wrappedValue: messaging)
         _notificationService = State(wrappedValue: notification)
         _networkMonitor = State(wrappedValue: NetworkMonitor())
+        _aiFeaturesService = State(wrappedValue: aiFeatures)
         appDelegate.notificationService = notification
     }
 
@@ -56,6 +61,12 @@ struct messageai_swiftApp: App {
                 .environment(messagingService)
                 .environment(notificationService)
                 .environment(networkMonitor)
+                .environment(aiFeaturesService)
+                .onAppear {
+                    // Configure AIFeaturesService with dependencies (keeping for future use)
+                    let modelContext = sharedModelContainer.mainContext
+                    aiFeaturesService.configure(messagingService: messagingService, modelContext: modelContext)
+                }
         }
         .modelContainer(sharedModelContainer)
     }

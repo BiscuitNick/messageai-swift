@@ -19,12 +19,19 @@ struct ChatView: View {
     @Environment(NotificationService.self) private var notificationService
     @Environment(FirestoreService.self) private var firestoreService
     @Environment(NetworkMonitor.self) private var networkMonitor
+    @Environment(AIFeaturesService.self) private var aiFeaturesService
 
     @State private var messageText: String = ""
     @State private var sendError: String?
     @State private var isSending: Bool = false
     @State private var isBotTyping: Bool = false
     @FocusState private var composerFocused: Bool
+
+    // Summarization state
+    @State private var showSummarySheet = false
+    @State private var threadSummary: ThreadSummaryResponse?
+    @State private var summaryError: String?
+    @State private var isSummarizing = false
 
     private var isAIConversation: Bool {
         conversation.participantIds.contains { $0.hasPrefix("bot:") }
@@ -174,6 +181,45 @@ struct ChatView: View {
         }
         .navigationTitle(chatTitle)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    Task {
+                        await summarizeConversation()
+                    }
+                } label: {
+                    if isSummarizing {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "doc.text.magnifyingglass")
+                    }
+                }
+                .disabled(isSummarizing)
+            }
+        }
+        .sheet(isPresented: $showSummarySheet) {
+            NavigationStack {
+                SummarySheetView(
+                    summary: threadSummary,
+                    error: summaryError,
+                    conversationId: conversationId,
+                    onRetry: {
+                        Task {
+                            await summarizeConversation()
+                        }
+                    }
+                )
+                .navigationTitle("Conversation Summary")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") {
+                            showSummarySheet = false
+                        }
+                    }
+                }
+            }
+        }
         .onAppear {
             notificationService.setActiveConversation(conversationId)
         }
@@ -258,6 +304,25 @@ struct ChatView: View {
                 composerFocused = true
             }
         }
+    }
+
+    @MainActor
+    private func summarizeConversation() async {
+        threadSummary = nil
+        summaryError = nil
+        isSummarizing = true
+        showSummarySheet = true
+
+        do {
+            let response = try await aiFeaturesService.summarizeThread(conversationId: conversationId, saveToDB: false)
+            threadSummary = response
+            print("Summary generated for conversation \(conversationId): \(response.summary)")
+        } catch {
+            summaryError = error.localizedDescription
+            print("Summarization error: \(error)")
+        }
+
+        isSummarizing = false
     }
 
     private func scrollToBottom(proxy: ScrollViewProxy) {
@@ -747,5 +812,74 @@ private struct ComposerView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(Color(.systemBackground))
+    }
+}
+
+private struct SummarySheetView: View {
+    let summary: ThreadSummaryResponse?
+    let error: String?
+    let conversationId: String
+    let onRetry: () -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if let error = error {
+                    VStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 48))
+                            .foregroundStyle(.red)
+
+                        Text("Failed to generate summary")
+                            .font(.headline)
+
+                        Text(error)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+
+                        Button("Retry") {
+                            onRetry()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                } else if let summary = summary {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Image(systemName: "doc.text.magnifyingglass")
+                                .foregroundStyle(.blue)
+                            Text("\(summary.messageCount) messages analyzed")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Divider()
+
+                        Text(.init(summary.summary))
+                            .font(.body)
+                            .textSelection(.enabled)
+
+                        Divider()
+
+                        Text("Generated \(summary.generatedAt.formatted(.relative(presentation: .named)))")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding()
+                } else {
+                    VStack(spacing: 16) {
+                        ProgressView()
+                        Text("Analyzing conversation...")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding()
+                }
+            }
+        }
+        .background(Color(.systemGroupedBackground))
     }
 }

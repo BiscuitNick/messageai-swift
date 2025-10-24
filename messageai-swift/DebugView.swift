@@ -1,5 +1,6 @@
 import FirebaseAuth
 import FirebaseCore
+import FirebaseFirestore
 import FirebaseFunctions
 import SwiftUI
 import SwiftData
@@ -11,6 +12,7 @@ struct DebugView: View {
     @Environment(NotificationService.self) private var notificationService
     @Environment(MessagingService.self) private var messagingService
     @Environment(FirestoreService.self) private var firestoreService
+    @Environment(AIFeaturesService.self) private var aiFeaturesService
     private let functions = Functions.functions(region: "us-central1")
 
     @Query private var bots: [BotEntity]
@@ -33,10 +35,17 @@ struct DebugView: View {
     @State private var deleteBotsError: String?
     @State private var isDeletingBots = false
 
+    // Thread Summarization states
+    @State private var summarizeStatus: String?
+    @State private var summarizeError: String?
+    @State private var isSummarizing = false
+    @State private var latestSummary: String?
+
     var body: some View {
         NavigationStack {
             List {
                 maintenanceSection
+                aiFeaturesSection
                 firebaseSection
                 authSection
                 botsSection
@@ -46,6 +55,36 @@ struct DebugView: View {
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Test")
+        }
+    }
+
+    private var aiFeaturesSection: some View {
+        Section("AI Features") {
+            Button {
+                Task { await summarizeNewestConversation() }
+            } label: {
+                if isSummarizing {
+                    ProgressView()
+                } else {
+                    Label("Summarize Newest Conversation", systemImage: "doc.text.magnifyingglass")
+                }
+            }
+            .disabled(isSummarizing)
+
+            statusText(success: summarizeStatus, error: summarizeError)
+
+            if let summary = latestSummary {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Latest Summary:")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(summary)
+                        .font(.caption)
+                        .padding(8)
+                        .background(Color(.secondarySystemBackground))
+                        .cornerRadius(8)
+                }
+            }
         }
     }
 
@@ -296,6 +335,26 @@ struct DebugView: View {
             deleteBotsStatus = "Bots deleted at \(Date().formatted(dateTimeFormatter))"
         } catch {
             deleteBotsError = describe(error)
+        }
+    }
+
+    @MainActor
+    private func summarizeNewestConversation() async {
+        summarizeStatus = nil
+        summarizeError = nil
+        latestSummary = nil
+        isSummarizing = true
+        defer { isSummarizing = false }
+
+        do {
+            let response = try await aiFeaturesService.summarizeThread(saveToDB: false)
+
+            latestSummary = response.summary
+            summarizeStatus = "Summarized \(response.messageCount) messages from conversation"
+            print("Summary generated: \(response.summary)")
+        } catch {
+            summarizeError = "Error: \(describe(error))"
+            print("Summarization error details: \(error)")
         }
     }
 

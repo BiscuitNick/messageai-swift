@@ -489,6 +489,406 @@ export const chatWithAgent = onCall<AgentRequest>(async (request) => {
   }
 });
 
+
+// export const getServerTime = onCall(async () => {
+//   const now = admin.firestore.Timestamp.now();
+//   return {
+//     iso: now.toDate().toISOString(),
+//     seconds: now.seconds,
+//     nanoseconds: now.nanoseconds,
+//   };
+// });
+
+// Thread Summarization
+// Summarizes the last 50 messages from the newest conversation
+
+// 
+
+export const summarizeThread = onCall(async (request) => {
+  const uid = requireAuth(request);
+
+  const timestamp = admin.firestore.Timestamp.now();
+
+  await Promise.all(
+    SAMPLE_CONTACTS.map(async (contact) => {
+      const userRef = firestore.collection(COLLECTION_USERS).doc(contact.id);
+      await userRef.set(
+        {
+          email: contact.email,
+          displayName: contact.displayName,
+          isOnline: false,
+          lastSeen: timestamp,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    })
+  );
+
+  const conversationTasks: Array<Promise<unknown>> = [];
+
+  const directContacts = SAMPLE_CONTACTS.slice(0, 2);
+  for (const contact of directContacts) {
+    conversationTasks.push(
+      seedConversation({
+        conversationId: deterministicConversationId("direct", [uid, contact.id]),
+        participants: [uid, contact.id],
+        isGroup: false,
+        groupName: undefined,
+      })
+    );
+  }
+
+  const groupContacts = SAMPLE_CONTACTS.slice(0, 3);
+  conversationTasks.push(
+    seedConversation({
+      conversationId: deterministicConversationId("group", [uid, ...groupContacts.map((c) => c.id)]),
+      participants: [uid, ...groupContacts.map((c) => c.id)],
+      isGroup: true,
+      groupName: "Product Squad",
+    })
+  );
+
+  await Promise.all(conversationTasks);
+
+  return {
+    status: "success",
+    seeded: {
+      direct: directContacts.length,
+      group: 1,
+    },
+  };
+});
+
+// Summarize a conversation thread
+// If conversationId is provided, summarizes that conversation
+// Otherwise, finds and summarizes the newest conversation
+export const summarizeThreadTest = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  const { conversationId: requestedConversationId } = request.data || {};
+
+  try {
+    let conversationId: string;
+
+    // If conversationId provided, use it. Otherwise find the newest conversation.
+    if (requestedConversationId) {
+      conversationId = requestedConversationId as string;
+      console.log(`Using requested conversation: ${conversationId}`);
+    } else {
+      // Find the newest conversation
+      const conversationsSnapshot = await firestore
+        .collection(COLLECTION_CONVERSATIONS)
+        .orderBy("updatedAt", "desc")
+        .limit(1)
+        .get();
+
+      if (conversationsSnapshot.empty) {
+        throw new HttpsError("not-found", "No conversations found");
+      }
+
+      conversationId = conversationsSnapshot.docs[0].id;
+      console.log(`Using newest conversation: ${conversationId}`);
+    }
+
+    // Verify conversation exists
+    const conversationRef = firestore.collection(COLLECTION_CONVERSATIONS).doc(conversationId);
+    const conversationDoc = await conversationRef.get();
+
+    if (!conversationDoc.exists) {
+      throw new HttpsError("not-found", "Conversation not found");
+    }
+
+    const conversationData = conversationDoc.data();
+    if (!conversationData) {
+      throw new HttpsError("not-found", "Conversation data not found");
+    }
+
+    // Check if user is a participant (only for authenticated requests)
+    if (uid) {
+      const participantIds = conversationData.participantIds as string[];
+      if (!participantIds.includes(uid)) {
+        throw new HttpsError(
+          "permission-denied",
+          "You do not have access to this conversation"
+        );
+      }
+    }
+
+    // Fetch recent messages (last 50 messages, ordered by timestamp)
+    const messagesSnapshot = await conversationRef
+      .collection(SUBCOLLECTION_MESSAGES)
+      .orderBy("timestamp", "desc")
+      .limit(50)
+      .get();
+
+    if (messagesSnapshot.empty) {
+      return {
+        summary: "No messages to summarize.",
+        conversationId,
+        messageCount: 0,
+        generatedAt: Date.now(),
+      };
+    }
+
+    // Reverse to get chronological order
+    const messages = messagesSnapshot.docs.reverse();
+
+    // Fetch user display names for all senders
+    const senderIds = [...new Set(messages.map((doc) => doc.data().senderId as string))];
+    const userDocs = await Promise.all(
+      senderIds.map((id) => {
+        // Handle bot IDs - bots don't have user documents
+        if (id.startsWith("bot:")) {
+          return Promise.resolve(null);
+        }
+        return firestore.collection(COLLECTION_USERS).doc(id).get();
+      })
+    );
+
+    const userNames = new Map<string, string>();
+    userDocs.forEach((doc, index) => {
+      const senderId = senderIds[index];
+      if (doc && doc.exists) {
+        userNames.set(senderId, doc.data()?.displayName as string || "Unknown");
+      } else if (senderId.startsWith("bot:")) {
+        // For bots, use a friendly name
+        const botId = senderId.replace("bot:", "");
+        userNames.set(senderId, `${botId.charAt(0).toUpperCase()}${botId.slice(1).replace("-", " ")}`);
+      } else {
+        userNames.set(senderId, "Unknown");
+      }
+    });
+
+    // Format messages for AI
+    const formattedMessages = messages.map((doc) => {
+      const data = doc.data();
+      const senderName = userNames.get(data.senderId as string) || "Unknown";
+      const timestamp = data.timestamp as admin.firestore.Timestamp | { toMillis: () => number };
+
+      // Handle both Firestore Timestamp and mock timestamp
+      let date: Date;
+      if (timestamp && typeof (timestamp as admin.firestore.Timestamp).toDate === 'function') {
+        date = (timestamp as admin.firestore.Timestamp).toDate();
+      } else if (timestamp && typeof (timestamp as { toMillis: () => number }).toMillis === 'function') {
+        date = new Date((timestamp as { toMillis: () => number }).toMillis());
+      } else {
+        date = new Date();
+      }
+
+      return `[${date.toLocaleString()}] ${senderName}: ${data.text}`;
+    }).join("\n");
+
+    // Generate summary using OpenAI
+    const summaryPrompt = `You are analyzing a conversation thread to create a concise summary for remote team professionals.
+
+Conversation messages:
+${formattedMessages}
+
+Please provide a structured summary that includes:
+1. **Key Decisions**: Important decisions that were made
+2. **Action Items**: Tasks or actions that need to be taken (with assignee if mentioned)
+3. **Important Updates**: Critical information or status updates
+4. **Next Steps**: What needs to happen next
+
+Keep the summary concise but comprehensive. Focus on actionable information and key takeaways.
+Format your response with clear sections using markdown headers.`;
+
+    const result = await assistantAgent.generate({
+      messages: [
+        {
+          role: "user",
+          content: summaryPrompt,
+        },
+      ],
+      system: "You are a helpful assistant that specializes in summarizing team conversations for remote professionals.",
+    });
+
+    const summary = result.text;
+
+    return {
+      summary,
+      conversationId,
+      messageCount: messages.length,
+      generatedAt: Date.now(),
+    };
+  } catch (error) {
+    console.error("Thread summarization error:", error);
+    if (error instanceof HttpsError) {
+      throw error;
+    }
+    throw new HttpsError(
+      "internal",
+      "Failed to generate thread summary",
+      error
+    );
+  }
+});
+
+// export const summarizeThread = onCall(async (request) => {
+//   // Make it work without auth for testing
+//   const uid = request.auth?.uid;
+//   console.log("Auth UID:", uid || "no auth");
+
+//   const now = admin.firestore.Timestamp.now();
+//   return {
+//     iso: now.toDate().toISOString(),
+//     seconds: now.seconds,
+//     nanoseconds: now.nanoseconds,
+//     uid: uid || "unauthenticated"
+//   };
+
+// //   const uid = request.auth?.uid;
+
+// //   try {
+// //     // Always find the newest conversation
+// //     const conversationsSnapshot = await firestore
+// //       .collection(COLLECTION_CONVERSATIONS)
+// //       .orderBy("updatedAt", "desc")
+// //       .limit(1)
+// //       .get();
+
+// //     if (conversationsSnapshot.empty) {
+// //       throw new HttpsError("not-found", "No conversations found");
+// //     }
+
+// //     const conversationId = conversationsSnapshot.docs[0].id;
+// //     console.log(`Using newest conversation: ${conversationId}`);
+
+// //     // Verify conversation exists
+// //     const conversationRef = firestore.collection(COLLECTION_CONVERSATIONS).doc(conversationId);
+// //     const conversationDoc = await conversationRef.get();
+
+// //     if (!conversationDoc.exists) {
+// //       throw new HttpsError("not-found", "Conversation not found");
+// //     }
+
+// //     const conversationData = conversationDoc.data();
+// //     if (!conversationData) {
+// //       throw new HttpsError("not-found", "Conversation data not found");
+// //     }
+
+// //     // Check if user is a participant (only for authenticated requests)
+// //     if (uid) {
+// //       const participantIds = conversationData.participantIds as string[];
+// //       if (!participantIds.includes(uid)) {
+// //         throw new HttpsError(
+// //           "permission-denied",
+// //           "You do not have access to this conversation"
+// //         );
+// //       }
+// //     }
+
+// //     // Fetch recent messages (last 50 messages, ordered by timestamp)
+// //     const messagesSnapshot = await conversationRef
+// //       .collection(SUBCOLLECTION_MESSAGES)
+// //       .orderBy("timestamp", "desc")
+// //       .limit(50)
+// //       .get();
+
+// //     if (messagesSnapshot.empty) {
+// //       return {
+// //         summary: "No messages to summarize.",
+// //         conversationId,
+// //         messageCount: 0,
+// //         generatedAt: Date.now(),
+// //       };
+// //     }
+
+// //     // Reverse to get chronological order
+// //     const messages = messagesSnapshot.docs.reverse();
+
+// //     // Fetch user display names for all senders
+// //     const senderIds = [...new Set(messages.map((doc) => doc.data().senderId as string))];
+// //     const userDocs = await Promise.all(
+// //       senderIds.map((id) => {
+// //         // Handle bot IDs - bots don't have user documents
+// //         if (id.startsWith("bot:")) {
+// //           return Promise.resolve(null);
+// //         }
+// //         return firestore.collection(COLLECTION_USERS).doc(id).get();
+// //       })
+// //     );
+
+// //     const userNames = new Map<string, string>();
+// //     userDocs.forEach((doc, index) => {
+// //       const senderId = senderIds[index];
+// //       if (doc && doc.exists) {
+// //         userNames.set(senderId, doc.data()?.displayName as string || "Unknown");
+// //       } else if (senderId.startsWith("bot:")) {
+// //         // For bots, use a friendly name
+// //         const botId = senderId.replace("bot:", "");
+// //         userNames.set(senderId, `${botId.charAt(0).toUpperCase()}${botId.slice(1).replace("-", " ")}`);
+// //       } else {
+// //         userNames.set(senderId, "Unknown");
+// //       }
+// //     });
+
+// //     // Format messages for AI
+// //     const formattedMessages = messages.map((doc) => {
+// //       const data = doc.data();
+// //       const senderName = userNames.get(data.senderId as string) || "Unknown";
+// //       const timestamp = data.timestamp as admin.firestore.Timestamp | { toMillis: () => number };
+
+// //       // Handle both Firestore Timestamp and mock timestamp
+// //       let date: Date;
+// //       if (timestamp && typeof (timestamp as admin.firestore.Timestamp).toDate === 'function') {
+// //         date = (timestamp as admin.firestore.Timestamp).toDate();
+// //       } else if (timestamp && typeof (timestamp as { toMillis: () => number }).toMillis === 'function') {
+// //         date = new Date((timestamp as { toMillis: () => number }).toMillis());
+// //       } else {
+// //         date = new Date();
+// //       }
+
+// //       return `[${date.toLocaleString()}] ${senderName}: ${data.text}`;
+// //     }).join("\n");
+
+// //     // Generate summary using OpenAI
+// //     const summaryPrompt = `You are analyzing a conversation thread to create a concise summary for remote team professionals.
+
+// // Conversation messages:
+// // ${formattedMessages}
+
+// // Please provide a structured summary that includes:
+// // 1. **Key Decisions**: Important decisions that were made
+// // 2. **Action Items**: Tasks or actions that need to be taken (with assignee if mentioned)
+// // 3. **Important Updates**: Critical information or status updates
+// // 4. **Next Steps**: What needs to happen next
+
+// // Keep the summary concise but comprehensive. Focus on actionable information and key takeaways.
+// // Format your response with clear sections using markdown headers.`;
+
+// //     const result = await assistantAgent.generate({
+// //       messages: [
+// //         {
+// //           role: "user",
+// //           content: summaryPrompt,
+// //         },
+// //       ],
+// //       system: "You are a helpful assistant that specializes in summarizing team conversations for remote professionals.",
+// //     });
+
+// //     const summary = result.text;
+
+// //     return {
+// //       summary,
+// //       conversationId,
+// //       messageCount: messages.length,
+// //       generatedAt: Date.now(),
+// //     };
+// //   } catch (error) {
+// //     console.error("Thread summarization error:", error);
+// //     if (error instanceof HttpsError) {
+// //       throw error;
+// //     }
+// //     throw new HttpsError(
+// //       "internal",
+// //       "Failed to generate thread summary",
+// //       error
+// //     );
+// //   }
+// });
+
 // Push Notification Trigger
 // Sends FCM push notifications when a new message is created
 // Temporarily commented out - uncomment after Eventarc permissions propagate

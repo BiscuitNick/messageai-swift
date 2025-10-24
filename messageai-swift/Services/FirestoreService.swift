@@ -300,8 +300,6 @@ final class FirestoreService {
     }
 
     func chatWithAgent(messages: [AgentMessage], conversationId: String) async throws {
-        let functions = Functions.functions(region: "us-central1")
-
         // Convert messages to format expected by Firebase function
         let messagesData = messages.map { message in
             return [
