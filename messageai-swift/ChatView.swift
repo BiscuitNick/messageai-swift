@@ -36,6 +36,8 @@ struct ChatView: View {
     @State private var showingSummary: Bool = false
     @State private var selectedTab: ChatTab = .messages
     @State private var hasScrolledToMessage = false
+    @State private var showMeetingSuggestions: Bool = false
+    @State private var meetingSuggestions: MeetingSuggestionsResponse?
     @FocusState private var composerFocused: Bool
 
     private var isAIConversation: Bool {
@@ -120,9 +122,20 @@ struct ChatView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button(action: { showingSummary = true }) {
-                    Image(systemName: "text.bubble")
-                        .foregroundStyle(.primary)
+                HStack(spacing: 12) {
+                    // Meeting Suggestions button (only for non-AI conversations with multiple participants)
+                    if !isAIConversation && conversation.participantIds.count >= 2 {
+                        Button(action: { loadMeetingSuggestions() }) {
+                            Image(systemName: "calendar.badge.clock")
+                                .foregroundStyle(.primary)
+                        }
+                    }
+
+                    // Thread Summary button
+                    Button(action: { showingSummary = true }) {
+                        Image(systemName: "text.bubble")
+                            .foregroundStyle(.primary)
+                    }
                 }
             }
         }
@@ -298,6 +311,31 @@ struct ChatView: View {
                 }
             }
 
+            // Meeting Suggestions Panel
+            if showMeetingSuggestions {
+                MeetingSuggestionsPanel(
+                    suggestions: meetingSuggestions,
+                    isLoading: aiFeaturesService.meetingSuggestionsLoadingStates[conversationId] ?? false,
+                    error: aiFeaturesService.meetingSuggestionsErrors[conversationId],
+                    onRefresh: { loadMeetingSuggestions(forceRefresh: true) },
+                    onCopy: { suggestion in
+                        copyMeetingSuggestion(suggestion)
+                    },
+                    onShare: { suggestion in
+                        shareMeetingSuggestion(suggestion)
+                    },
+                    onAddToCalendar: { suggestion in
+                        addToCalendar(suggestion)
+                    },
+                    onDismiss: {
+                        withAnimation {
+                            showMeetingSuggestions = false
+                        }
+                    }
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
             Divider()
 
             ComposerView(
@@ -395,6 +433,145 @@ struct ChatView: View {
             return botLookup[botId]
         }
         return nil
+    }
+
+    // MARK: - Meeting Suggestions
+
+    private func loadMeetingSuggestions(forceRefresh: Bool = false) {
+        withAnimation {
+            showMeetingSuggestions = true
+        }
+
+        Task {
+            do {
+                let response = try await aiFeaturesService.suggestMeetingTimes(
+                    conversationId: conversationId,
+                    participantIds: participantIds.filter { !$0.hasPrefix("bot:") },
+                    durationMinutes: 60, // Default 1 hour
+                    preferredDays: 14,
+                    forceRefresh: forceRefresh
+                )
+                await MainActor.run {
+                    meetingSuggestions = response
+                }
+            } catch {
+                print("Failed to load meeting suggestions: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func copyMeetingSuggestion(_ suggestion: MeetingTimeSuggestion) {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+
+        let text = """
+        Meeting Time Suggestion:
+        When: \(formatter.string(from: suggestion.startTime)) - \(formatter.string(from: suggestion.endTime))
+        Day: \(suggestion.dayOfWeek), \(suggestion.timeOfDay.displayLabel)
+        Reason: \(suggestion.justification)
+        """
+
+        #if os(iOS)
+        UIPasteboard.general.string = text
+        #endif
+
+        // Track analytics
+        Task {
+            await aiFeaturesService.trackMeetingSuggestionInteraction(
+                conversationId: conversationId,
+                action: "copy",
+                suggestionIndex: meetingSuggestions?.suggestions.firstIndex(where: { $0.id == suggestion.id }) ?? 0,
+                suggestionScore: suggestion.score
+            )
+        }
+    }
+
+    private func shareMeetingSuggestion(_ suggestion: MeetingTimeSuggestion) {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+
+        let text = """
+        Meeting Time Suggestion:
+        When: \(formatter.string(from: suggestion.startTime)) - \(formatter.string(from: suggestion.endTime))
+        Day: \(suggestion.dayOfWeek), \(suggestion.timeOfDay.displayLabel)
+        Reason: \(suggestion.justification)
+        """
+
+        #if os(iOS)
+        let activityVC = UIActivityViewController(activityItems: [text], applicationActivities: nil)
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let rootViewController = windowScene.windows.first?.rootViewController {
+            // Find the topmost view controller
+            var topController = rootViewController
+            while let presented = topController.presentedViewController {
+                topController = presented
+            }
+            topController.present(activityVC, animated: true)
+        }
+        #endif
+
+        // Track analytics
+        Task {
+            await aiFeaturesService.trackMeetingSuggestionInteraction(
+                conversationId: conversationId,
+                action: "share",
+                suggestionIndex: meetingSuggestions?.suggestions.firstIndex(where: { $0.id == suggestion.id }) ?? 0,
+                suggestionScore: suggestion.score
+            )
+        }
+    }
+
+    private func addToCalendar(_ suggestion: MeetingTimeSuggestion) {
+        // Create calendar deep link URL
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyyMMdd'T'HHmmss'Z'"
+        dateFormatter.timeZone = TimeZone(identifier: "UTC")
+
+        let startTime = dateFormatter.string(from: suggestion.startTime)
+        let endTime = dateFormatter.string(from: suggestion.endTime)
+
+        // Format title and details
+        let title = "Meeting"
+        let details = suggestion.justification.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+
+        // Create Google Calendar URL (most universal option)
+        let googleCalendarURL = "https://calendar.google.com/calendar/render?action=TEMPLATE&text=\(title)&dates=\(startTime)/\(endTime)&details=\(details)"
+
+        // Create Apple Calendar data URL as alternative
+        let appleCalendarData = """
+        BEGIN:VCALENDAR
+        VERSION:2.0
+        BEGIN:VEVENT
+        DTSTART:\(startTime)
+        DTEND:\(endTime)
+        SUMMARY:\(title)
+        DESCRIPTION:\(suggestion.justification)
+        END:VEVENT
+        END:VCALENDAR
+        """.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+
+        // Try to open the calendar URL
+        #if os(iOS)
+        if let url = URL(string: googleCalendarURL) {
+            UIApplication.shared.open(url, options: [:]) { success in
+                if !success {
+                    print("Failed to open calendar URL")
+                }
+            }
+        }
+        #endif
+
+        // Track analytics
+        Task {
+            await aiFeaturesService.trackMeetingSuggestionInteraction(
+                conversationId: conversationId,
+                action: "add_to_calendar",
+                suggestionIndex: meetingSuggestions?.suggestions.firstIndex(where: { $0.id == suggestion.id }) ?? 0,
+                suggestionScore: suggestion.score
+            )
+        }
     }
 }
 

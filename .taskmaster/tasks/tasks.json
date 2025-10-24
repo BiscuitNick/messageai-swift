@@ -623,7 +623,7 @@
         "testStrategy": "- Write unit test for suggestion function using mocked availability data to ensure output structure and ranking logic.\n- XCTest verifying AIFeaturesService caches suggestions and respects expiry windows before requerying.\n- UI automation to trigger suggestion flow with seeded chat command and validate panel rendering and CTA behavior.",
         "priority": "medium",
         "dependencies": [],
-        "status": "in-progress",
+        "status": "done",
         "subtasks": [
           {
             "id": 1,
@@ -681,9 +681,10 @@
               3
             ],
             "details": "Modify `ChatView` to observe `AIFeaturesService` publishers, render a sliding suggestions panel with ranked options, and manage loading/error states.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "Author SwiftUI snapshot/UI tests to confirm panel presentation, dismissal, and state transitions under mocked data feeds.",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2025-10-24T18:27:34.680Z"
           },
           {
             "id": 6,
@@ -693,9 +694,10 @@
               5
             ],
             "details": "Add buttons that format invite text, copy to clipboard, and open calendar URLs via `UIApplication.shared.open`, including graceful failure handling.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "Write UI tests or automation scripts verifying CTA triggers copyboard updates and invokes deep link handlers; add unit tests around invite formatting.",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2025-10-24T18:29:19.822Z"
           },
           {
             "id": 7,
@@ -708,15 +710,16 @@
               6
             ],
             "details": "Consolidate new tests: backend Jest specs, Swift unit tests for caching, and UI automation to trigger suggestion flow with seeded data, ensuring reproducible fixtures.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "Run combined test suite locally/emulator, ensuring coverage of backend responses, SwiftData caching, and UI behavior; capture regressions through CI integration.",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2025-10-24T18:31:05.392Z"
           }
         ],
         "complexity": 8,
         "recommendedSubtasks": 7,
         "expansionPrompt": "Request subtasks such as: (1) adding the `suggestMeetingTimes` callable and analytics writes in `functions/src/index.ts`; (2) defining meeting suggestion DTOs and SwiftData entities; (3) exposing suggestion APIs, caching, and expiry logic in `AIFeaturesService`; (4) integrating with ChatView via a Smart Suggestions panel; (5) handling share/copy CTAs and deep links; (6) recording analytics or counters in Firestore; (7) building unit, emulator, and UI automation coverage.",
-        "updatedAt": "2025-10-24T18:18:11.970Z"
+        "updatedAt": "2025-10-24T18:31:05.392Z"
       },
       {
         "id": "8",
@@ -1038,9 +1041,9 @@
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2025-10-24T18:18:11.971Z",
+      "lastModified": "2025-10-24T18:31:05.393Z",
       "taskCount": 10,
-      "completedCount": 6,
+      "completedCount": 7,
       "tags": [
         "master"
       ]
