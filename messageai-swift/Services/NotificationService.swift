@@ -60,11 +60,28 @@ final class NotificationService: NSObject {
         Messaging.messaging().apnsToken = token
     }
 
+    private func notificationSound(for priority: PriorityLevel, isAppInForeground: Bool) -> UNNotificationSound {
+        // Use different sounds based on priority and app state
+        switch priority {
+        case .critical, .urgent:
+            // Use default sound for urgent messages (always audible)
+            return .default
+        case .high:
+            // Use default sound for high priority
+            return .default
+        case .medium, .low:
+            // Use default sound for normal priority
+            // Could use .defaultCritical for critical alerts requiring override
+            return .default
+        }
+    }
+
     func handleNewMessage(
         conversationId: String,
         senderName: String,
         messagePreview: String,
-        isAppInForeground: Bool
+        isAppInForeground: Bool,
+        priority: PriorityLevel = .medium
     ) async {
         // Don't show notification if conversation is currently active and app is in foreground
         if isAppInForeground, activeConversationId == conversationId {
@@ -75,11 +92,22 @@ final class NotificationService: NSObject {
         let content = UNMutableNotificationContent()
         content.title = senderName
         content.body = messagePreview
-        content.sound = .default
+
+        // Select sound based on priority
+        content.sound = notificationSound(for: priority, isAppInForeground: isAppInForeground)
+
+        // Set category for interactive notifications based on priority
+        if priority.sortOrder >= PriorityLevel.high.sortOrder {
+            content.categoryIdentifier = "HIGH_PRIORITY_MESSAGE"
+        } else {
+            content.categoryIdentifier = "MESSAGE"
+        }
+
         content.badge = NSNumber(value: 1)
         content.userInfo = [
             "conversationId": conversationId,
-            "type": "new_message"
+            "type": "new_message",
+            "priority": priority.rawValue
         ]
 
         // Create unique identifier
@@ -98,6 +126,82 @@ final class NotificationService: NSObject {
         } catch {
             print("[NotificationService] Failed to show notification: \(error.localizedDescription)")
         }
+    }
+
+    // MARK: - Decision Reminder Scheduling
+
+    /// Schedule a reminder notification for a decision follow-up
+    /// - Parameters:
+    ///   - decisionId: Unique identifier for the decision
+    ///   - conversationId: The conversation containing the decision
+    ///   - decisionText: Brief text of the decision
+    ///   - reminderDate: When to deliver the reminder
+    /// - Throws: Notification scheduling errors
+    func scheduleDecisionReminder(
+        decisionId: String,
+        conversationId: String,
+        decisionText: String,
+        reminderDate: Date
+    ) async throws {
+        let content = UNMutableNotificationContent()
+        content.title = "Decision Follow-up"
+        content.body = decisionText
+        content.sound = .default
+        content.categoryIdentifier = "DECISION_REMINDER"
+        content.userInfo = [
+            "conversationId": conversationId,
+            "decisionId": decisionId,
+            "type": "decision_reminder"
+        ]
+
+        // Create date-based trigger
+        let calendar = Calendar.current
+        let components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: reminderDate)
+        let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
+
+        // Use decisionId as identifier for easy cancellation
+        let identifier = "decision_reminder_\(decisionId)"
+        let request = UNNotificationRequest(
+            identifier: identifier,
+            content: content,
+            trigger: trigger
+        )
+
+        try await UNUserNotificationCenter.current().add(request)
+        print("[NotificationService] Scheduled decision reminder for \(reminderDate)")
+    }
+
+    /// Cancel a scheduled decision reminder
+    /// - Parameter decisionId: The decision whose reminder should be cancelled
+    func cancelDecisionReminder(decisionId: String) {
+        let identifier = "decision_reminder_\(decisionId)"
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [identifier])
+        print("[NotificationService] Cancelled decision reminder: \(decisionId)")
+    }
+
+    /// Reschedule a decision reminder to a new date
+    /// - Parameters:
+    ///   - decisionId: The decision to reschedule
+    ///   - conversationId: The conversation containing the decision
+    ///   - decisionText: Brief text of the decision
+    ///   - newReminderDate: New date for the reminder
+    /// - Throws: Notification scheduling errors
+    func rescheduleDecisionReminder(
+        decisionId: String,
+        conversationId: String,
+        decisionText: String,
+        newReminderDate: Date
+    ) async throws {
+        // Cancel existing reminder
+        cancelDecisionReminder(decisionId: decisionId)
+
+        // Schedule new reminder
+        try await scheduleDecisionReminder(
+            decisionId: decisionId,
+            conversationId: conversationId,
+            decisionText: decisionText,
+            reminderDate: newReminderDate
+        )
     }
 }
 

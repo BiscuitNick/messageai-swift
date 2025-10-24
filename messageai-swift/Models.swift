@@ -7,6 +7,7 @@
 
 import Foundation
 import SwiftData
+import SwiftUI
 
 @Model
 final class UserEntity {
@@ -169,6 +170,12 @@ final class MessageEntity {
     var readByData: Data
     var updatedAt: Date
 
+    // Priority metadata
+    var priorityScore: Int?
+    var priorityLabel: String?
+    var priorityRationale: String?
+    var priorityAnalyzedAt: Date?
+
     init(
         id: String,
         conversationId: String,
@@ -177,7 +184,11 @@ final class MessageEntity {
         timestamp: Date = .init(),
         deliveryStatus: DeliveryStatus = .sending,
         readReceipts: [String: Date] = [:],
-        updatedAt: Date = .init()
+        updatedAt: Date = .init(),
+        priorityScore: Int? = nil,
+        priorityLabel: String? = nil,
+        priorityRationale: String? = nil,
+        priorityAnalyzedAt: Date? = nil
     ) {
         self.id = id
         self.conversationId = conversationId
@@ -187,6 +198,10 @@ final class MessageEntity {
         self.deliveryStatusRawValue = deliveryStatus.rawValue
         self.readByData = LocalJSONCoder.encode(readReceipts)
         self.updatedAt = updatedAt
+        self.priorityScore = priorityScore
+        self.priorityLabel = priorityLabel
+        self.priorityRationale = priorityRationale
+        self.priorityAnalyzedAt = priorityAnalyzedAt
     }
 
     var deliveryStatus: DeliveryStatus {
@@ -222,6 +237,20 @@ final class MessageEntity {
             readReceipts = updated
         }
     }
+
+    var priority: PriorityLevel {
+        get {
+            guard let label = priorityLabel else { return .medium }
+            return PriorityLevel(rawValue: label) ?? .medium
+        }
+        set {
+            priorityLabel = newValue.rawValue
+        }
+    }
+
+    var hasPriorityData: Bool {
+        priorityAnalyzedAt != nil
+    }
 }
 
 enum DeliveryStatus: String, Codable, CaseIterable, Sendable {
@@ -249,9 +278,261 @@ enum PresenceStatus: String, Codable, CaseIterable, Sendable {
     }
 }
 
+enum PriorityLevel: String, Codable, CaseIterable, Sendable {
+    case low
+    case medium
+    case high
+    case urgent
+    case critical
+
+    var displayLabel: String {
+        switch self {
+        case .low: return "Low"
+        case .medium: return "Medium"
+        case .high: return "High"
+        case .urgent: return "Urgent"
+        case .critical: return "Critical"
+        }
+    }
+
+    var emoji: String {
+        switch self {
+        case .low: return "⚪️"
+        case .medium: return "🟡"
+        case .high: return "🟠"
+        case .urgent: return "🔴"
+        case .critical: return "🔥"
+        }
+    }
+
+    var sortOrder: Int {
+        switch self {
+        case .low: return 0
+        case .medium: return 1
+        case .high: return 2
+        case .urgent: return 3
+        case .critical: return 4
+        }
+    }
+}
+
 extension UserEntity {
     var presenceStatus: PresenceStatus {
         PresenceStatus.status(isOnline: isOnline, lastSeen: lastSeen)
+    }
+}
+
+@Model
+final class ThreadSummaryEntity {
+    @Attribute(.unique) var id: String
+    var conversationId: String
+    var summary: String
+    var keyPointsData: Data
+    var generatedAt: Date
+    var messageCount: Int
+    var createdAt: Date
+    var updatedAt: Date
+
+    init(
+        id: String = UUID().uuidString,
+        conversationId: String,
+        summary: String,
+        keyPoints: [String],
+        generatedAt: Date,
+        messageCount: Int,
+        createdAt: Date = .init(),
+        updatedAt: Date = .init()
+    ) {
+        self.id = id
+        self.conversationId = conversationId
+        self.summary = summary
+        self.keyPointsData = LocalJSONCoder.encode(keyPoints)
+        self.generatedAt = generatedAt
+        self.messageCount = messageCount
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    var keyPoints: [String] {
+        get { LocalJSONCoder.decode(keyPointsData, fallback: []) }
+        set { keyPointsData = LocalJSONCoder.encode(newValue) }
+    }
+}
+
+@Model
+final class ActionItemEntity {
+    @Attribute(.unique) var id: String
+    var conversationId: String
+    var task: String
+    var assignedTo: String?
+    var dueDate: Date?
+    var priorityRawValue: String
+    var statusRawValue: String
+    var createdAt: Date
+    var updatedAt: Date
+
+    init(
+        id: String,
+        conversationId: String,
+        task: String,
+        assignedTo: String? = nil,
+        dueDate: Date? = nil,
+        priority: ActionItemPriority = .medium,
+        status: ActionItemStatus = .pending,
+        createdAt: Date = .init(),
+        updatedAt: Date = .init()
+    ) {
+        self.id = id
+        self.conversationId = conversationId
+        self.task = task
+        self.assignedTo = assignedTo
+        self.dueDate = dueDate
+        self.priorityRawValue = priority.rawValue
+        self.statusRawValue = status.rawValue
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    var priority: ActionItemPriority {
+        get { ActionItemPriority(rawValue: priorityRawValue) ?? .medium }
+        set { priorityRawValue = newValue.rawValue }
+    }
+
+    var status: ActionItemStatus {
+        get { ActionItemStatus(rawValue: statusRawValue) ?? .pending }
+        set { statusRawValue = newValue.rawValue }
+    }
+}
+
+@Model
+final class SearchResultEntity {
+    @Attribute(.unique) var id: String
+    var query: String
+    var conversationId: String
+    var messageId: String
+    var snippet: String
+    var rank: Int
+    var timestamp: Date
+    var createdAt: Date
+
+    init(
+        id: String = UUID().uuidString,
+        query: String,
+        conversationId: String,
+        messageId: String,
+        snippet: String,
+        rank: Int,
+        timestamp: Date,
+        createdAt: Date = .init()
+    ) {
+        self.id = id
+        self.conversationId = conversationId
+        self.messageId = messageId
+        self.snippet = snippet
+        self.rank = rank
+        self.timestamp = timestamp
+        self.query = query
+        self.createdAt = createdAt
+    }
+}
+
+@Model
+final class RecentQueryEntity {
+    @Attribute(.unique) var id: String
+    var query: String
+    var searchedAt: Date
+    var resultCount: Int
+
+    init(
+        id: String = UUID().uuidString,
+        query: String,
+        searchedAt: Date = .init(),
+        resultCount: Int = 0
+    ) {
+        self.id = id
+        self.query = query
+        self.searchedAt = searchedAt
+        self.resultCount = resultCount
+    }
+}
+
+@Model
+final class DecisionEntity {
+    @Attribute(.unique) var id: String
+    var conversationId: String
+    var decisionText: String
+    var contextSummary: String
+    var participantIdsData: Data
+    var decidedAt: Date
+    var followUpStatusRawValue: String
+    var confidenceScore: Double
+    var reminderDate: Date?
+    var createdAt: Date
+    var updatedAt: Date
+
+    init(
+        id: String = UUID().uuidString,
+        conversationId: String,
+        decisionText: String,
+        contextSummary: String,
+        participantIds: [String],
+        decidedAt: Date,
+        followUpStatus: DecisionFollowUpStatus = .pending,
+        confidenceScore: Double,
+        reminderDate: Date? = nil,
+        createdAt: Date = .init(),
+        updatedAt: Date = .init()
+    ) {
+        self.id = id
+        self.conversationId = conversationId
+        self.decisionText = decisionText
+        self.contextSummary = contextSummary
+        self.participantIdsData = LocalJSONCoder.encode(participantIds)
+        self.decidedAt = decidedAt
+        self.followUpStatusRawValue = followUpStatus.rawValue
+        self.confidenceScore = confidenceScore
+        self.reminderDate = reminderDate
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    var participantIds: [String] {
+        get {
+            if let ids = try? LocalJSONCoder.decoder.decode([String].self, from: participantIdsData) {
+                return ids
+            }
+            return []
+        }
+        set {
+            participantIdsData = LocalJSONCoder.encode(newValue)
+        }
+    }
+
+    var followUpStatus: DecisionFollowUpStatus {
+        get { DecisionFollowUpStatus(rawValue: followUpStatusRawValue) ?? .pending }
+        set { followUpStatusRawValue = newValue.rawValue }
+    }
+}
+
+enum DecisionFollowUpStatus: String, Codable, CaseIterable, Sendable {
+    case pending
+    case completed
+    case cancelled
+
+    var displayLabel: String {
+        switch self {
+        case .pending: return "Pending"
+        case .completed: return "Completed"
+        case .cancelled: return "Cancelled"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .pending: return .orange
+        case .completed: return .green
+        case .cancelled: return .gray
+        }
     }
 }
 

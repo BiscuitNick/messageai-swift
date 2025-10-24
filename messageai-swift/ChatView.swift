@@ -8,22 +8,33 @@
 import SwiftUI
 import SwiftData
 
+enum ChatTab: String, CaseIterable {
+    case messages = "Messages"
+    case actionItems = "Action Items"
+    case decisions = "Decisions"
+}
+
 struct ChatView: View {
     let conversation: ConversationEntity
     let currentUser: AuthService.AppUser
     private let conversationId: String
     private let participantIds: [String]
+    private let scrollToMessageId: String?
 
     @Environment(MessagingService.self) private var messagingService
     @Environment(AuthService.self) private var authService
     @Environment(NotificationService.self) private var notificationService
     @Environment(FirestoreService.self) private var firestoreService
     @Environment(NetworkMonitor.self) private var networkMonitor
+    @Environment(AIFeaturesService.self) private var aiFeaturesService
 
     @State private var messageText: String = ""
     @State private var sendError: String?
     @State private var isSending: Bool = false
     @State private var isBotTyping: Bool = false
+    @State private var showingSummary: Bool = false
+    @State private var selectedTab: ChatTab = .messages
+    @State private var hasScrolledToMessage = false
     @FocusState private var composerFocused: Bool
 
     private var isAIConversation: Bool {
@@ -61,7 +72,7 @@ struct ChatView: View {
         }
     }
 
-    init(conversation: ConversationEntity, currentUser: AuthService.AppUser) {
+    init(conversation: ConversationEntity, currentUser: AuthService.AppUser, scrollToMessageId: String? = nil) {
         let conversationId = conversation.id
         let participantIds = conversation.participantIds
 
@@ -69,6 +80,7 @@ struct ChatView: View {
         self.currentUser = currentUser
         self.conversationId = conversationId
         self.participantIds = participantIds
+        self.scrollToMessageId = scrollToMessageId
         _participants = Query(
             filter: #Predicate<UserEntity> { user in
                 participantIds.contains(user.id)
@@ -83,6 +95,105 @@ struct ChatView: View {
     }
 
     var body: some View {
+        VStack(spacing: 0) {
+            // Tab picker
+            Picker("View", selection: $selectedTab) {
+                ForEach(ChatTab.allCases, id: \.self) { tab in
+                    Text(tab.rawValue).tag(tab)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding()
+
+            // Tab content
+            switch selectedTab {
+            case .messages:
+                messagesTab
+            case .actionItems:
+                ActionItemsTabView(conversationId: conversationId)
+            case .decisions:
+                DecisionsTabView(conversationId: conversationId)
+            }
+        }
+        .navigationTitle(chatTitle)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(action: { showingSummary = true }) {
+                    Image(systemName: "text.bubble")
+                        .foregroundStyle(.primary)
+                }
+            }
+        }
+        .onAppear {
+            notificationService.setActiveConversation(conversationId)
+        }
+        .onDisappear {
+            notificationService.setActiveConversation(nil)
+        }
+        .sheet(isPresented: $showingSummary) {
+            NavigationStack {
+                ScrollView {
+                    ThreadSummaryCard(
+                        summary: aiFeaturesService.fetchThreadSummary(for: conversationId).map { entity in
+                            ThreadSummaryResponse(
+                                summary: entity.summary,
+                                keyPoints: entity.keyPoints,
+                                conversationId: entity.conversationId,
+                                timestamp: entity.generatedAt,
+                                messageCount: entity.messageCount
+                            )
+                        },
+                        isLoading: aiFeaturesService.summaryLoadingStates[conversationId] ?? false,
+                        error: aiFeaturesService.summaryErrors[conversationId],
+                        onRefresh: {
+                            Task {
+                                do {
+                                    _ = try await aiFeaturesService.summarizeThread(
+                                        conversationId: conversationId,
+                                        forceRefresh: true
+                                    )
+                                } catch {
+                                    print("Failed to refresh summary: \(error)")
+                                }
+                            }
+                        }
+                    )
+                    .padding()
+                }
+                .navigationTitle("Thread Summary")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Done") {
+                            showingSummary = false
+                        }
+                    }
+                }
+            }
+        }
+        .onAppear {
+            notificationService.setActiveConversation(conversationId)
+        }
+        .onDisappear {
+            notificationService.setActiveConversation(nil)
+        }
+        .alert(
+            "Unable to send message",
+            isPresented: .init(
+                get: { sendError != nil },
+                set: { if !$0 { sendError = nil } }
+            ),
+            actions: {
+                Button("OK", role: .cancel) { sendError = nil }
+            },
+            message: {
+                Text(sendError ?? "Unknown error")
+            }
+        )
+    }
+
+    private var messagesTab: some View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView {
@@ -159,7 +270,18 @@ struct ChatView: View {
                 .task {
                     messagingService.ensureMessageListener(for: conversationId)
                     await messagingService.markConversationAsRead(conversationId)
-                    scrollToBottom(proxy: proxy)
+
+                    // Scroll to specific message if provided (from search), otherwise scroll to bottom
+                    if let messageId = scrollToMessageId, !hasScrolledToMessage {
+                        // Give a moment for messages to load
+                        try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+                        withAnimation {
+                            proxy.scrollTo(messageId, anchor: .center)
+                        }
+                        hasScrolledToMessage = true
+                    } else {
+                        scrollToBottom(proxy: proxy)
+                    }
                 }
             }
 
@@ -172,27 +294,6 @@ struct ChatView: View {
             )
             .focused($composerFocused)
         }
-        .navigationTitle(chatTitle)
-        .navigationBarTitleDisplayMode(.inline)
-        .onAppear {
-            notificationService.setActiveConversation(conversationId)
-        }
-        .onDisappear {
-            notificationService.setActiveConversation(nil)
-        }
-        .alert(
-            "Unable to send message",
-            isPresented: .init(
-                get: { sendError != nil },
-                set: { if !$0 { sendError = nil } }
-            ),
-            actions: {
-                Button("OK", role: .cancel) { sendError = nil }
-            },
-            message: {
-                Text(sendError ?? "Unknown error")
-            }
-        )
     }
 
     private var chatTitle: String {
@@ -520,6 +621,16 @@ private struct MessageBubble: View {
             .padding(.vertical, 8)
             .background(bubbleColor)
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(alignment: .topTrailing) {
+                if message.hasPriorityData && message.priority.sortOrder >= PriorityLevel.high.sortOrder {
+                    Text(message.priority.emoji)
+                        .font(.caption2)
+                        .padding(4)
+                        .background(Color.black.opacity(0.3))
+                        .clipShape(Circle())
+                        .offset(x: 4, y: -4)
+                }
+            }
     }
 
     private var metadataRow: some View {

@@ -19,12 +19,18 @@ struct messageai_swiftApp: App {
     @State private var messagingService: MessagingService
     @State private var notificationService: NotificationService
     @State private var networkMonitor: NetworkMonitor
+    @State private var aiFeaturesService: AIFeaturesService
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
             UserEntity.self,
             BotEntity.self,
             ConversationEntity.self,
             MessageEntity.self,
+            ThreadSummaryEntity.self,
+            ActionItemEntity.self,
+            SearchResultEntity.self,
+            RecentQueryEntity.self,
+            DecisionEntity.self,
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
@@ -45,6 +51,7 @@ struct messageai_swiftApp: App {
         _messagingService = State(wrappedValue: MessagingService())
         _notificationService = State(wrappedValue: notification)
         _networkMonitor = State(wrappedValue: NetworkMonitor())
+        _aiFeaturesService = State(wrappedValue: AIFeaturesService())
         appDelegate.notificationService = notification
     }
 
@@ -56,6 +63,7 @@ struct messageai_swiftApp: App {
                 .environment(messagingService)
                 .environment(notificationService)
                 .environment(networkMonitor)
+                .environment(aiFeaturesService)
         }
         .modelContainer(sharedModelContainer)
     }

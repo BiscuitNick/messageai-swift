@@ -21,6 +21,7 @@ struct ContentView: View {
     @Environment(FirestoreService.self) private var firestoreService
     @Environment(MessagingService.self) private var messagingService
     @Environment(NotificationService.self) private var notificationService
+    @Environment(AIFeaturesService.self) private var aiFeaturesService
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
     @State private var hasConfiguredContext = false
@@ -63,6 +64,12 @@ struct ContentView: View {
         .task {
             guard !hasConfiguredContext else { return }
             authService.configure(modelContext: modelContext, firestoreService: firestoreService)
+            aiFeaturesService.configure(
+                modelContext: modelContext,
+                authService: authService,
+                messagingService: messagingService,
+                firestoreService: firestoreService
+            )
             firestoreService.startUserListener(modelContext: modelContext)
             firestoreService.startBotListener(modelContext: modelContext)
             hasStartedUserListener = true
@@ -78,6 +85,10 @@ struct ContentView: View {
             }
             if let userId = authService.currentUser?.id {
                 messagingService.configure(modelContext: modelContext, currentUserId: userId, notificationService: notificationService)
+                // Wire AI Features message observer
+                messagingService.onMessageMutation = { [weak aiFeaturesService] conversationId, messageId in
+                    aiFeaturesService?.onMessageMutation(conversationId: conversationId, messageId: messageId)
+                }
             }
             await authService.markCurrentUserOnline()
             authService.sceneDidBecomeActive()
@@ -95,6 +106,7 @@ struct ContentView: View {
                         hasStartedBotListener = false
                     }
                     messagingService.reset()
+                    aiFeaturesService.onSignOut()
                     authService.sceneDidEnterBackground()
                     selectedTab = .chats
                     return
@@ -109,6 +121,11 @@ struct ContentView: View {
                 }
                 await notificationService.registerForRemoteNotifications()
                 messagingService.configure(modelContext: modelContext, currentUserId: newId, notificationService: notificationService)
+                // Wire AI Features message observer
+                messagingService.onMessageMutation = { [weak aiFeaturesService] conversationId, messageId in
+                    aiFeaturesService?.onMessageMutation(conversationId: conversationId, messageId: messageId)
+                }
+                aiFeaturesService.onSignIn()
                 await authService.markCurrentUserOnline()
                 authService.sceneDidBecomeActive()
                 selectedTab = .chats

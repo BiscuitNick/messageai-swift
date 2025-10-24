@@ -3,7 +3,7 @@ import { HttpsError, onCall } from "firebase-functions/v2/https";
 import type { CallableRequest } from "firebase-functions/v2/https";
 import { setGlobalOptions } from "firebase-functions/v2/options";
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
-import { Experimental_Agent as Agent } from "ai";
+import { Experimental_Agent as Agent, generateObject } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { tool } from "ai";
 import { z } from "zod";
@@ -52,6 +52,7 @@ const SAMPLE_CONTACTS: SampleContact[] = [
 
 const DELIVERY_SENT = "sent";
 const COLLECTION_USERS = "users";
+const COLLECTION_BOTS = "bots";
 const COLLECTION_CONVERSATIONS = "conversations";
 const SUBCOLLECTION_MESSAGES = "messages";
 const DIRECT_INTRO_MESSAGE = "Hey there! Ready to build something great today?";
@@ -486,6 +487,1071 @@ export const chatWithAgent = onCall<AgentRequest>(async (request) => {
       "Failed to process agent request",
       error
     );
+  }
+});
+
+// Thread Summarization
+// Summarizes a conversation thread by analyzing recent messages
+type SummarizeThreadRequest = {
+  conversationId: string;
+  messageLimit?: number;
+};
+
+export const summarizeThread = onCall<SummarizeThreadRequest>(async (request) => {
+  const uid = requireAuth(request);
+
+  const { conversationId, messageLimit = 50 } = request.data;
+
+  if (!conversationId) {
+    throw new HttpsError(
+      "invalid-argument",
+      "conversationId is required"
+    );
+  }
+
+  try {
+    // Verify conversation exists and user has access
+    const conversationRef = firestore.collection(COLLECTION_CONVERSATIONS).doc(conversationId);
+    const conversationDoc = await conversationRef.get();
+
+    if (!conversationDoc.exists) {
+      throw new HttpsError("not-found", "Conversation not found");
+    }
+
+    const conversationData = conversationDoc.data();
+    const participantIds = conversationData?.participantIds as string[] || [];
+
+    // Verify user is a participant
+    if (!participantIds.includes(uid)) {
+      throw new HttpsError("permission-denied", "User is not a participant in this conversation");
+    }
+
+    // Fetch recent messages
+    const messagesSnapshot = await conversationRef
+      .collection(SUBCOLLECTION_MESSAGES)
+      .orderBy("timestamp", "desc")
+      .limit(messageLimit)
+      .get();
+
+    if (messagesSnapshot.empty) {
+      return {
+        summary: "No messages to summarize.",
+        key_points: [],
+        conversation_id: conversationId,
+        timestamp: new Date().toISOString(),
+        message_count: 0,
+      };
+    }
+
+    // Build messages array (reverse to chronological order)
+    const messages = messagesSnapshot.docs.reverse().map((doc) => {
+      const data = doc.data();
+      return {
+        senderId: data.senderId as string,
+        text: data.text as string,
+        timestamp: (data.timestamp as admin.firestore.Timestamp).toDate(),
+      };
+    });
+
+    // Fetch participant names for context
+    const uniqueSenderIds = [...new Set(messages.map(m => m.senderId))];
+    const senderNames: Record<string, string> = {};
+
+    await Promise.all(
+      uniqueSenderIds.map(async (senderId) => {
+        // Handle bot participants
+        if (senderId.startsWith("bot:")) {
+          const botId = senderId.replace("bot:", "");
+          const botDoc = await firestore.collection("bots").doc(botId).get();
+          if (botDoc.exists) {
+            senderNames[senderId] = botDoc.data()?.name as string || "Bot";
+          } else {
+            senderNames[senderId] = "Bot";
+          }
+        } else {
+          const userDoc = await firestore.collection(COLLECTION_USERS).doc(senderId).get();
+          if (userDoc.exists) {
+            senderNames[senderId] = userDoc.data()?.displayName as string || "Unknown";
+          } else {
+            senderNames[senderId] = "Unknown";
+          }
+        }
+      })
+    );
+
+    // Build summary prompt
+    const conversationText = messages
+      .map((msg) => `${senderNames[msg.senderId]}: ${msg.text}`)
+      .join("\n");
+
+    const systemPrompt = `You are an AI assistant that creates concise summaries of conversation threads.
+Your goal is to:
+1. Identify the main topics and key points discussed
+2. Highlight any decisions made
+3. Note any action items or next steps
+4. Capture important updates or announcements
+5. Keep the summary brief and focused
+
+Format your response as a JSON object with:
+- summary: A 2-3 sentence overview of the conversation
+- keyPoints: An array of 3-5 key points or highlights (strings)`;
+
+    const userPrompt = `Summarize the following conversation:\n\n${conversationText}`;
+
+    // Define the response schema for structured output
+    const summarySchema = z.object({
+      summary: z.string().describe("A 2-3 sentence overview of the conversation"),
+      keyPoints: z.array(z.string()).describe("An array of 3-5 key points or highlights"),
+    });
+
+    // Call OpenAI for summarization using Vercel AI SDK
+    const { object: summaryData } = await generateObject({
+      model: openai("gpt-4o-mini"),
+      system: systemPrompt,
+      prompt: userPrompt,
+      schema: summarySchema,
+      temperature: 0.3,
+    });
+
+    // Format response matching ThreadSummaryResponse DTO
+    return {
+      summary: summaryData.summary || "Summary not available.",
+      key_points: summaryData.keyPoints || [],
+      conversation_id: conversationId,
+      timestamp: new Date().toISOString(),
+      message_count: messages.length,
+    };
+  } catch (error) {
+    console.error("Summarization error:", error);
+    if (error instanceof HttpsError) {
+      throw error;
+    }
+    throw new HttpsError(
+      "internal",
+      "Failed to summarize conversation",
+      error
+    );
+  }
+});
+
+// ============================================================================
+// AI Feature: Action Item Extraction
+// ============================================================================
+
+interface ExtractActionItemsRequest {
+  conversationId: string;
+  windowDays?: number; // Default: 7 days
+}
+
+// Define the action item schema using Zod for validation
+const actionItemSchema = z.object({
+  id: z.string().describe("Unique identifier for the action item"),
+  task: z.string().describe("Description of the action item or task"),
+  assignedTo: z.string().optional().describe("User ID or email of the person assigned"),
+  dueDate: z.string().optional().describe("ISO 8601 date string for when the task is due"),
+  priority: z.enum(["low", "medium", "high", "urgent"]).describe("Priority level of the task"),
+  status: z.enum(["pending", "in_progress", "completed", "cancelled"]).describe("Current status of the task"),
+});
+
+const actionItemsResponseSchema = z.object({
+  actionItems: z.array(actionItemSchema).describe("List of extracted action items"),
+});
+
+/**
+ * Callable function to extract action items from recent conversation messages
+ * Uses OpenAI to analyze messages and identify actionable tasks with metadata
+ */
+export const extractActionItems = onCall<ExtractActionItemsRequest>(async (request) => {
+  const uid = requireAuth(request);
+  const { conversationId, windowDays = 7 } = request.data;
+
+  try {
+    // Verify user is a participant in the conversation
+    const conversationRef = firestore.collection(COLLECTION_CONVERSATIONS).doc(conversationId);
+    const conversationDoc = await conversationRef.get();
+
+    if (!conversationDoc.exists) {
+      throw new HttpsError("not-found", `Conversation ${conversationId} not found`);
+    }
+
+    const conversationData = conversationDoc.data();
+    const participantIds = conversationData?.participantIds || [];
+
+    if (!participantIds.includes(uid)) {
+      throw new HttpsError(
+        "permission-denied",
+        "User is not a participant in this conversation"
+      );
+    }
+
+    // Calculate the cutoff date for the time window
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - windowDays);
+
+    // Fetch messages from the last N days
+    const messagesSnapshot = await conversationRef
+      .collection("messages")
+      .where("timestamp", ">=", cutoffDate)
+      .orderBy("timestamp", "asc")
+      .limit(100) // Limit to prevent excessive token usage
+      .get();
+
+    if (messagesSnapshot.empty) {
+      return {
+        action_items: [],
+        conversation_id: conversationId,
+        window_days: windowDays,
+        message_count: 0,
+      };
+    }
+
+    // Build message context with participant names
+    const messages = messagesSnapshot.docs.map((doc) => doc.data());
+
+    // Fetch participant display names for context
+    const senderIds = [...new Set(messages.map((msg) => msg.senderId))];
+    const displayNames: Record<string, string> = {};
+
+    for (const senderId of senderIds) {
+      if (senderId.startsWith("bot:")) {
+        const botId = senderId.substring(4);
+        const botDoc = await firestore.collection(COLLECTION_BOTS).doc(botId).get();
+        if (botDoc.exists) {
+          displayNames[senderId] = botDoc.data()?.name || "AI Assistant";
+        }
+      } else {
+        const userDoc = await firestore.collection(COLLECTION_USERS).doc(senderId).get();
+        if (userDoc.exists) {
+          displayNames[senderId] = userDoc.data()?.displayName || "Unknown User";
+        }
+      }
+    }
+
+    // Build conversation context
+    const conversationText = messages
+      .map((msg) => {
+        const senderName = displayNames[msg.senderId] || "Unknown";
+        return `[${senderName}]: ${msg.text}`;
+      })
+      .join("\n");
+
+    // System prompt for action item extraction
+    const systemPrompt = `You are an AI assistant specialized in extracting action items and tasks from conversation messages.
+
+Your task is to analyze the conversation and identify:
+1. Explicit action items (tasks someone said they would do)
+2. Implied commitments or responsibilities
+3. Deadlines or time-sensitive items
+4. Assigned tasks (who is responsible)
+5. Priorities based on context
+
+For each action item, determine:
+- A clear, concise description of the task
+- Who it's assigned to (if mentioned)
+- When it's due (if mentioned)
+- The priority level (low, medium, high, urgent)
+- Current status (pending by default, unless mentioned as in-progress or completed)
+
+Generate a unique ID for each action item using a combination of timestamp and index.
+Format due dates as ISO 8601 strings if dates are mentioned.
+If an assignee is mentioned by name, try to match it to a participant in the conversation.
+
+Only extract genuine action items - ignore casual mentions or hypothetical discussions.`;
+
+    const userPrompt = `Analyze the following conversation and extract all action items:\n\n${conversationText}`;
+
+    // Call OpenAI for action item extraction using Vercel AI SDK
+    const { object: extractedData } = await generateObject({
+      model: openai("gpt-4o-mini"),
+      system: systemPrompt,
+      prompt: userPrompt,
+      schema: actionItemsResponseSchema,
+      temperature: 0.2, // Lower temperature for more deterministic extraction
+    });
+
+    // Format response and persist to Firestore
+    const actionItems = extractedData.actionItems.map((item, index) => ({
+      id: item.id || `action-${Date.now()}-${index}`,
+      task: item.task,
+      assigned_to: item.assignedTo || null,
+      due_date: item.dueDate || null,
+      priority: item.priority,
+      status: item.status,
+      conversation_id: conversationId,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }));
+
+    // Persist action items to Firestore subcollection
+    const batch = firestore.batch();
+    const actionItemsRef = conversationRef.collection("actionItems");
+
+    for (const actionItem of actionItems) {
+      const itemRef = actionItemsRef.doc(actionItem.id);
+      const existingDoc = await itemRef.get();
+
+      if (existingDoc.exists) {
+        // Update existing action item, preserving created_at
+        const existingData = existingDoc.data();
+        batch.set(itemRef, {
+          ...actionItem,
+          created_at: existingData?.created_at || actionItem.created_at,
+          updated_at: new Date().toISOString(),
+        }, { merge: true });
+      } else {
+        // Create new action item
+        batch.set(itemRef, actionItem);
+      }
+    }
+
+    await batch.commit();
+
+    return {
+      action_items: actionItems,
+      conversation_id: conversationId,
+      window_days: windowDays,
+      message_count: messages.length,
+    };
+  } catch (error) {
+    console.error("Action item extraction error:", error);
+    if (error instanceof HttpsError) {
+      throw error;
+    }
+    throw new HttpsError(
+      "internal",
+      "Failed to extract action items",
+      error
+    );
+  }
+});
+
+// ============================================================================
+// AI Feature: Semantic Smart Search
+// ============================================================================
+
+interface SmartSearchRequest {
+  query: string;
+  maxResults?: number; // Default: 20
+}
+
+interface SearchHit {
+  id: string;
+  conversationId: string;
+  messageId: string;
+  snippet: string;
+  rank: number;
+  timestamp: string;
+}
+
+interface GroupedSearchResult {
+  conversationId: string;
+  hits: SearchHit[];
+}
+
+interface MessageData {
+  conversationId: string;
+  messageId: string;
+  senderId: string;
+  text: string;
+  timestamp: Date;
+}
+
+// Define the search result schema using Zod
+const searchHitSchema = z.object({
+  messageId: z.string().describe("ID of the message containing the relevant content"),
+  snippet: z.string().describe("Relevant excerpt from the message"),
+  relevanceScore: z.number().min(0).max(1).describe("Relevance score between 0 and 1"),
+  reasoning: z.string().optional().describe("Brief explanation of why this message is relevant"),
+});
+
+const searchResultsSchema = z.object({
+  results: z.array(searchHitSchema).describe("List of search results ranked by relevance"),
+});
+
+/**
+ * Helper: Collect recent messages from user's conversations
+ */
+async function collectMessages(
+  uid: string,
+  messagesPerConversation: number = 50
+): Promise<MessageData[]> {
+  // Fetch all conversations where user is a participant
+  const conversationsSnapshot = await firestore
+    .collection(COLLECTION_CONVERSATIONS)
+    .where("participantIds", "array-contains", uid)
+    .get();
+
+  if (conversationsSnapshot.empty) {
+    return [];
+  }
+
+  const conversationIds = conversationsSnapshot.docs.map((doc) => doc.id);
+  const allMessages: MessageData[] = [];
+
+  // Collect messages from each conversation
+  const messagePromises = conversationIds.map(async (conversationId) => {
+    const messagesSnapshot = await firestore
+      .collection(COLLECTION_CONVERSATIONS)
+      .doc(conversationId)
+      .collection(SUBCOLLECTION_MESSAGES)
+      .orderBy("timestamp", "desc")
+      .limit(messagesPerConversation)
+      .get();
+
+    return messagesSnapshot.docs.map((doc) => {
+      const data = doc.data();
+      return {
+        conversationId,
+        messageId: doc.id,
+        senderId: data.senderId as string,
+        text: data.text as string,
+        timestamp: (data.timestamp as admin.firestore.Timestamp).toDate(),
+      };
+    });
+  });
+
+  const messagesArrays = await Promise.all(messagePromises);
+  messagesArrays.forEach((messages) => allMessages.push(...messages));
+
+  return allMessages;
+}
+
+/**
+ * Helper: Fetch display names for message senders (users and bots)
+ */
+async function fetchSenderNames(senderIds: string[]): Promise<Record<string, string>> {
+  const senderNames: Record<string, string> = {};
+
+  await Promise.all(
+    senderIds.map(async (senderId) => {
+      if (senderId.startsWith("bot:")) {
+        const botId = senderId.replace("bot:", "");
+        const botDoc = await firestore.collection(COLLECTION_BOTS).doc(botId).get();
+        senderNames[senderId] = botDoc.exists ? (botDoc.data()?.name as string || "Bot") : "Bot";
+      } else {
+        const userDoc = await firestore.collection(COLLECTION_USERS).doc(senderId).get();
+        senderNames[senderId] = userDoc.exists
+          ? (userDoc.data()?.displayName as string || "Unknown")
+          : "Unknown";
+      }
+    })
+  );
+
+  return senderNames;
+}
+
+/**
+ * Helper: Build search context and prompts for OpenAI
+ */
+function buildSearchPrompt(
+  query: string,
+  messages: MessageData[],
+  senderNames: Record<string, string>,
+  maxResults: number
+): { systemPrompt: string; userPrompt: string } {
+  // Build search context with message indices
+  const searchContext = messages
+    .map((msg, index) => {
+      const senderName = senderNames[msg.senderId] || "Unknown";
+      return `[MSG-${index}] [${senderName}]: ${msg.text}`;
+    })
+    .join("\n");
+
+  const systemPrompt = `You are a semantic search assistant that helps users find relevant messages in their conversations.
+
+Your task is to:
+1. Understand the user's search query intent
+2. Identify the most relevant messages based on semantic meaning, not just keyword matching
+3. Rank results by relevance
+4. Provide brief reasoning for why each message is relevant
+
+Each message is prefixed with [MSG-{index}] for reference.
+Return the message indices (as messageId) of the most relevant messages, ordered by relevance (most relevant first).
+Include a relevance score (0-1) and a brief snippet of the relevant content.
+Limit results to the ${maxResults} most relevant messages.`;
+
+  const userPrompt = `Search query: "${query}"\n\nConversation messages:\n${searchContext}`;
+
+  return { systemPrompt, userPrompt };
+}
+
+/**
+ * Helper: Map OpenAI search results back to actual message data
+ */
+function normalizeSearchHits(
+  searchResults: Array<{ messageId: string; snippet: string }>,
+  messages: MessageData[],
+  maxResults: number
+): SearchHit[] {
+  const searchHits: SearchHit[] = searchResults
+    .slice(0, maxResults)
+    .map((result, rank) => {
+      // Extract index from messageId (format: "MSG-{index}")
+      const indexMatch = result.messageId.match(/MSG-(\d+)/);
+      if (!indexMatch) return null;
+
+      const messageIndex = parseInt(indexMatch[1], 10);
+      if (messageIndex >= messages.length) return null;
+
+      const message = messages[messageIndex];
+      return {
+        id: `${message.conversationId}-${message.messageId}`,
+        conversationId: message.conversationId,
+        messageId: message.messageId,
+        snippet: result.snippet,
+        rank: rank + 1,
+        timestamp: message.timestamp.toISOString(),
+      };
+    })
+    .filter((hit): hit is SearchHit => hit !== null);
+
+  return searchHits;
+}
+
+/**
+ * Helper: Group search hits by conversation
+ */
+function groupResultsByConversation(searchHits: SearchHit[]): GroupedSearchResult[] {
+  const groupedMap = new Map<string, SearchHit[]>();
+
+  searchHits.forEach((hit) => {
+    if (!groupedMap.has(hit.conversationId)) {
+      groupedMap.set(hit.conversationId, []);
+    }
+    groupedMap.get(hit.conversationId)!.push(hit);
+  });
+
+  return Array.from(groupedMap.entries()).map(([conversationId, hits]) => ({
+    conversationId,
+    hits: hits.sort((a, b) => a.rank - b.rank),
+  }));
+}
+
+/**
+ * Callable function for semantic search across user's conversations
+ * Uses OpenAI to understand query intent and find relevant messages
+ */
+export const smartSearch = onCall<SmartSearchRequest>(async (request) => {
+  const uid = requireAuth(request);
+  const { query, maxResults = 20 } = request.data;
+
+  if (!query || query.trim().length === 0) {
+    throw new HttpsError("invalid-argument", "Search query is required");
+  }
+
+  try {
+    // 1. Collect messages from user's conversations
+    const allMessages = await collectMessages(uid);
+
+    if (allMessages.length === 0) {
+      return {
+        grouped_results: [],
+        query,
+        total_hits: 0,
+      };
+    }
+
+    // 2. Fetch sender names for context
+    const uniqueSenderIds = [...new Set(allMessages.map((m) => m.senderId))];
+    const senderNames = await fetchSenderNames(uniqueSenderIds);
+
+    // 3. Build search prompts
+    const { systemPrompt, userPrompt } = buildSearchPrompt(
+      query,
+      allMessages,
+      senderNames,
+      maxResults
+    );
+
+    // 4. Call OpenAI for semantic search
+    const { object: searchData } = await generateObject({
+      model: openai("gpt-4o-mini"),
+      system: systemPrompt,
+      prompt: userPrompt,
+      schema: searchResultsSchema,
+      temperature: 0.2,
+    });
+
+    // 5. Normalize results back to message data
+    const searchHits = normalizeSearchHits(searchData.results, allMessages, maxResults);
+
+    // 6. Group results by conversation
+    const groupedResults = groupResultsByConversation(searchHits);
+
+    return {
+      grouped_results: groupedResults,
+      query,
+      total_hits: searchHits.length,
+    };
+  } catch (error) {
+    console.error("Smart search error:", error);
+    if (error instanceof HttpsError) {
+      throw error;
+    }
+    throw new HttpsError("internal", "Failed to perform smart search", error);
+  }
+});
+
+// ============================================================================
+// Priority Classification Trigger
+// ============================================================================
+
+// Zod schema for priority classification response
+const priorityClassificationSchema = z.object({
+  score: z.number().min(1).max(5).describe("Priority score from 1 (low) to 5 (urgent)"),
+  label: z.enum(["low", "medium", "high", "urgent", "critical"]).describe("Priority label"),
+  rationale: z.string().describe("Brief explanation of the priority assessment"),
+});
+
+type PriorityClassification = z.infer<typeof priorityClassificationSchema>;
+
+// Default priority for messages without classification
+const DEFAULT_PRIORITY: PriorityClassification = {
+  score: 2,
+  label: "medium",
+  rationale: "Default priority - message not yet analyzed",
+};
+
+/**
+ * Gets priority metadata with safe defaults for missing fields
+ */
+function getPriorityWithDefaults(
+  messageData: FirebaseFirestore.DocumentData
+): PriorityClassification & { analyzedAt: admin.firestore.Timestamp | null } {
+  return {
+    score: messageData.priorityScore ?? DEFAULT_PRIORITY.score,
+    label: messageData.priorityLabel ?? DEFAULT_PRIORITY.label,
+    rationale: messageData.priorityRationale ?? DEFAULT_PRIORITY.rationale,
+    analyzedAt: messageData.priorityAnalyzedAt ?? null,
+  };
+}
+
+/**
+ * Validates and normalizes priority data
+ */
+function normalizePriorityData(data: Partial<PriorityClassification>): PriorityClassification {
+  // Validate score is in range
+  const score = Math.max(1, Math.min(5, data.score ?? DEFAULT_PRIORITY.score));
+
+  // Validate label is one of the allowed values
+  const validLabels: Array<PriorityClassification["label"]> = ["low", "medium", "high", "urgent", "critical"];
+  const label = validLabels.includes(data.label as any) ? data.label! : DEFAULT_PRIORITY.label;
+
+  return {
+    score,
+    label,
+    rationale: data.rationale ?? DEFAULT_PRIORITY.rationale,
+  };
+}
+
+/**
+ * Checks if a message should be classified for priority
+ */
+function shouldClassifyPriority(messageData: FirebaseFirestore.DocumentData): boolean {
+  const senderId = messageData.senderId as string | undefined;
+  const text = messageData.text as string | undefined;
+
+  // Skip if no sender or text
+  if (!senderId || !text) {
+    return false;
+  }
+
+  // Skip bot messages (format: "bot:botId")
+  if (senderId.startsWith("bot:")) {
+    return false;
+  }
+
+  // Skip system messages
+  if (messageData.isSystemMessage === true) {
+    return false;
+  }
+
+  // Skip if already analyzed
+  if (messageData.priorityAnalyzedAt) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Classifies message priority using OpenAI
+ */
+async function classifyMessagePriority(messageText: string): Promise<PriorityClassification> {
+  const openai = createOpenAI({
+    apiKey: openaiApiKey.value(),
+  });
+
+  const systemPrompt = `You are a message priority classifier. Analyze the given message and assign a priority score and label based on urgency, importance, and time-sensitivity.
+
+Priority Guidelines:
+- Score 1 (low): Casual conversation, FYI messages, non-urgent updates
+- Score 2 (medium-low): General questions, routine requests
+- Score 3 (medium): Actionable items, scheduled tasks, normal business
+- Score 4 (high): Time-sensitive requests, important decisions needed soon
+- Score 5 (urgent/critical): Immediate action required, emergencies, blocking issues
+
+Consider:
+- Urgency indicators (ASAP, urgent, now, immediately)
+- Question marks (questions often need responses)
+- Action verbs (need, require, must)
+- Time constraints (today, deadline, by EOD)
+- Emotional tone (stressed, frustrated)`;
+
+  const userPrompt = `Classify this message:\n\n"${messageText}"`;
+
+  const { object: classification } = await generateObject({
+    model: openai("gpt-4o-mini"),
+    system: systemPrompt,
+    prompt: userPrompt,
+    schema: priorityClassificationSchema,
+    temperature: 0.3,
+  });
+
+  return classification;
+}
+
+/**
+ * Firebase trigger: Analyzes priority of new messages
+ * Runs when a new message is created in any conversation
+ */
+export const analyzeMessagePriority = onDocumentCreated(
+  "conversations/{conversationId}/messages/{messageId}",
+  async (event) => {
+    const messageData = event.data?.data();
+
+    if (!messageData) {
+      console.log("[analyzeMessagePriority] No message data found");
+      return;
+    }
+
+    // Check if this message should be classified
+    if (!shouldClassifyPriority(messageData)) {
+      console.log("[analyzeMessagePriority] Skipping classification - message doesn't meet criteria");
+      return;
+    }
+
+    const messageText = messageData.text as string;
+    const conversationId = event.params.conversationId;
+    const messageId = event.params.messageId;
+
+    console.log(`[analyzeMessagePriority] Analyzing message ${messageId} in conversation ${conversationId}`);
+
+    try {
+      // Classify the message priority
+      const rawClassification = await classifyMessagePriority(messageText);
+
+      // Normalize the classification to ensure valid data
+      const classification = normalizePriorityData(rawClassification);
+
+      console.log(`[analyzeMessagePriority] Classification result:`, {
+        score: classification.score,
+        label: classification.label,
+        rationale: classification.rationale.substring(0, 100),
+      });
+
+      // Update the message document with priority metadata
+      await event.data?.ref.set(
+        {
+          priorityScore: classification.score,
+          priorityLabel: classification.label,
+          priorityRationale: classification.rationale,
+          priorityAnalyzedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      console.log(`[analyzeMessagePriority] Successfully updated message ${messageId} with priority data`);
+    } catch (error) {
+      console.error(`[analyzeMessagePriority] Error classifying message ${messageId}:`, error);
+      // Don't throw - we don't want to block message creation if classification fails
+    }
+  }
+);
+
+/**
+ * Backfill priority analysis for existing messages
+ * Analyzes messages in a conversation that don't have priority data
+ */
+export const backfillMessagePriorities = onCall<{
+  conversationId: string;
+  limit?: number;
+}>(async (request) => {
+  const uid = requireAuth(request);
+  const { conversationId, limit = 50 } = request.data;
+
+  console.log(`[backfillMessagePriorities] Starting backfill for conversation ${conversationId}, limit: ${limit}`);
+
+  try {
+    // Verify user is a participant in the conversation
+    const conversationDoc = await firestore
+      .collection(COLLECTION_CONVERSATIONS)
+      .doc(conversationId)
+      .get();
+
+    if (!conversationDoc.exists) {
+      throw new HttpsError("not-found", "Conversation not found");
+    }
+
+    const conversationData = conversationDoc.data();
+    const participantIds = conversationData?.participantIds as string[] || [];
+
+    if (!participantIds.includes(uid)) {
+      throw new HttpsError("permission-denied", "User is not a participant in this conversation");
+    }
+
+    // Query messages without priority analysis
+    const messagesSnapshot = await firestore
+      .collection(COLLECTION_CONVERSATIONS)
+      .doc(conversationId)
+      .collection(SUBCOLLECTION_MESSAGES)
+      .where("priorityAnalyzedAt", "==", null)
+      .orderBy("createdAt", "desc")
+      .limit(limit)
+      .get();
+
+    console.log(`[backfillMessagePriorities] Found ${messagesSnapshot.docs.length} messages to analyze`);
+
+    let analyzed = 0;
+    let skipped = 0;
+    let failed = 0;
+
+    // Process messages in batches to avoid timeout
+    const promises = messagesSnapshot.docs.map(async (doc) => {
+      const messageData = doc.data();
+
+      // Check if should classify
+      if (!shouldClassifyPriority(messageData)) {
+        skipped++;
+        return;
+      }
+
+      try {
+        const messageText = messageData.text as string;
+        const rawClassification = await classifyMessagePriority(messageText);
+        const classification = normalizePriorityData(rawClassification);
+
+        await doc.ref.set(
+          {
+            priorityScore: classification.score,
+            priorityLabel: classification.label,
+            priorityRationale: classification.rationale,
+            priorityAnalyzedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        analyzed++;
+      } catch (error) {
+        console.error(`[backfillMessagePriorities] Failed to analyze message ${doc.id}:`, error);
+        failed++;
+      }
+    });
+
+    await Promise.all(promises);
+
+    console.log(`[backfillMessagePriorities] Complete - analyzed: ${analyzed}, skipped: ${skipped}, failed: ${failed}`);
+
+    return {
+      conversationId,
+      analyzed,
+      skipped,
+      failed,
+      total: messagesSnapshot.docs.length,
+    };
+  } catch (error) {
+    console.error("[backfillMessagePriorities] Error:", error);
+    if (error instanceof HttpsError) {
+      throw error;
+    }
+    throw new HttpsError("internal", "Failed to backfill message priorities", error);
+  }
+});
+
+// ============================================================================
+// Decision Tracking
+// ============================================================================
+
+// Zod schema for decision extraction
+const decisionSchema = z.object({
+  decisionText: z.string().describe("The decision that was made"),
+  contextSummary: z.string().describe("Brief context explaining why this decision was made"),
+  participantIds: z.array(z.string()).describe("User IDs of people involved in the decision"),
+  decidedAt: z.string().describe("ISO timestamp when the decision was made"),
+  followUpStatus: z.enum(["pending", "completed", "cancelled"]).describe("Current status of any follow-up actions"),
+  confidenceScore: z.number().min(0).max(1).describe("Confidence that this is actually a decision (0-1)"),
+});
+
+const decisionsResponseSchema = z.object({
+  decisions: z.array(decisionSchema).describe("List of decisions found in the conversation"),
+});
+
+type Decision = z.infer<typeof decisionSchema>;
+type DecisionsResponse = z.infer<typeof decisionsResponseSchema>;
+
+/**
+ * Tracks decisions from a conversation using OpenAI
+ */
+export const trackDecisions = onCall<{
+  conversationId: string;
+  windowDays?: number;
+}>(async (request) => {
+  const uid = requireAuth(request);
+  const { conversationId, windowDays = 30 } = request.data;
+
+  console.log(`[trackDecisions] Analyzing conversation ${conversationId} for decisions`);
+
+  try {
+    // Verify user is a participant in the conversation
+    const conversationDoc = await firestore
+      .collection(COLLECTION_CONVERSATIONS)
+      .doc(conversationId)
+      .get();
+
+    if (!conversationDoc.exists) {
+      throw new HttpsError("not-found", "Conversation not found");
+    }
+
+    const conversationData = conversationDoc.data();
+    const participantIds = conversationData?.participantIds as string[] || [];
+
+    if (!participantIds.includes(uid)) {
+      throw new HttpsError("permission-denied", "User is not a participant in this conversation");
+    }
+
+    // Calculate time window
+    const windowStart = new Date();
+    windowStart.setDate(windowStart.getDate() - windowDays);
+
+    // Fetch messages from the window
+    const messagesSnapshot = await firestore
+      .collection(COLLECTION_CONVERSATIONS)
+      .doc(conversationId)
+      .collection(SUBCOLLECTION_MESSAGES)
+      .where("timestamp", ">=", admin.firestore.Timestamp.fromDate(windowStart))
+      .orderBy("timestamp", "asc")
+      .limit(200) // Limit to avoid token overflow
+      .get();
+
+    if (messagesSnapshot.empty) {
+      console.log(`[trackDecisions] No messages in window for conversation ${conversationId}`);
+      return { decisions: [] };
+    }
+
+    // Fetch sender names for context
+    const senderIds = new Set<string>();
+    const messageData: Array<{
+      senderId: string;
+      text: string;
+      timestamp: Date;
+    }> = [];
+
+    messagesSnapshot.docs.forEach(doc => {
+      const data = doc.data();
+      const senderId = data.senderId as string;
+      const text = data.text as string;
+      const timestamp = (data.timestamp as admin.firestore.Timestamp)?.toDate() || new Date();
+
+      senderIds.add(senderId);
+      messageData.push({ senderId, text, timestamp });
+    });
+
+    // Fetch sender names
+    const senderNames = await fetchSenderNames(Array.from(senderIds));
+
+    // Build conversation transcript
+    const transcript = messageData.map(msg => {
+      const senderName = senderNames[msg.senderId] || "Unknown";
+      const timeStr = msg.timestamp.toISOString();
+      return `[${timeStr}] ${senderName}: ${msg.text}`;
+    }).join("\n");
+
+    // Extract decisions using OpenAI
+    const openai = createOpenAI({
+      apiKey: openaiApiKey.value(),
+    });
+
+    const systemPrompt = `You are a decision tracking assistant. Analyze the conversation transcript and identify any decisions that were made.
+
+A decision is:
+- A concrete choice or commitment made by participants
+- Something actionable or that changes plans/direction
+- Not just a suggestion or possibility, but a finalized choice
+
+For each decision, provide:
+- The decision text (what was decided)
+- Context summary (why it was decided)
+- Participant IDs of those involved
+- Timestamp when it was decided
+- Follow-up status (pending by default)
+- Confidence score (how certain you are this is a real decision)
+
+Only include decisions with confidence >= 0.7`;
+
+    const userPrompt = `Analyze this conversation and extract decisions:\n\n${transcript}`;
+
+    const { object: response } = await generateObject({
+      model: openai("gpt-4o-mini"),
+      system: systemPrompt,
+      prompt: userPrompt,
+      schema: decisionsResponseSchema,
+      temperature: 0.2,
+    });
+
+    // Filter decisions by confidence
+    const highConfidenceDecisions = response.decisions.filter(d => d.confidenceScore >= 0.7);
+
+    console.log(`[trackDecisions] Found ${highConfidenceDecisions.length} high-confidence decisions`);
+
+    // Persist decisions to Firestore
+    const decisionsCollection = firestore
+      .collection(COLLECTION_CONVERSATIONS)
+      .doc(conversationId)
+      .collection("decisions");
+
+    const batch = firestore.batch();
+    const persistedDecisions: Decision[] = [];
+
+    for (const decision of highConfidenceDecisions) {
+      // Create a hash for deduplication
+      const decisionHash = `${decision.decisionText.toLowerCase().slice(0, 50)}-${decision.decidedAt}`;
+      const docId = Buffer.from(decisionHash).toString("base64").replace(/[/+=]/g, "").slice(0, 20);
+
+      const decisionRef = decisionsCollection.doc(docId);
+      const decisionDoc = await decisionRef.get();
+
+      // Skip if already exists
+      if (decisionDoc.exists) {
+        console.log(`[trackDecisions] Decision ${docId} already exists, skipping`);
+        continue;
+      }
+
+      const decisionData = {
+        ...decision,
+        decidedAt: admin.firestore.Timestamp.fromDate(new Date(decision.decidedAt)),
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+
+      batch.set(decisionRef, decisionData);
+      persistedDecisions.push(decision);
+    }
+
+    await batch.commit();
+
+    console.log(`[trackDecisions] Persisted ${persistedDecisions.length} new decisions`);
+
+    return {
+      decisions: persistedDecisions,
+      total: highConfidenceDecisions.length,
+      persisted: persistedDecisions.length,
+    };
+  } catch (error) {
+    console.error("[trackDecisions] Error:", error);
+    if (error instanceof HttpsError) {
+      throw error;
+    }
+    throw new HttpsError("internal", "Failed to track decisions", error);
   }
 });
 

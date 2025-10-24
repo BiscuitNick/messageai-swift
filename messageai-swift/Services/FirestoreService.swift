@@ -25,6 +25,10 @@ final class FirestoreService {
     @ObservationIgnored private var userModelContext: ModelContext?
     @ObservationIgnored private var botsListener: ListenerRegistration?
     @ObservationIgnored private var botModelContext: ModelContext?
+    @ObservationIgnored private var actionItemsListeners: [String: ListenerRegistration] = [:]
+    @ObservationIgnored private var actionItemsModelContexts: [String: ModelContext] = [:]
+    @ObservationIgnored private var decisionsListeners: [String: ListenerRegistration] = [:]
+    @ObservationIgnored private var decisionsModelContexts: [String: ModelContext] = [:]
 
     init() {
         let firestore = Firestore.firestore()
@@ -266,6 +270,215 @@ final class FirestoreService {
         }
     }
 
+    func startActionItemsListener(conversationId: String, modelContext: ModelContext) {
+        actionItemsModelContexts[conversationId] = modelContext
+
+        actionItemsListeners[conversationId]?.remove()
+        actionItemsListeners[conversationId] = db.collection("conversations")
+            .document(conversationId)
+            .collection("actionItems")
+            .addSnapshotListener { [weak self] snapshot, error in
+                guard let self else { return }
+                if let error {
+                    self.debugLog("Action items listener error: \(error.localizedDescription)")
+                    return
+                }
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    await self.handleActionItemSnapshot(
+                        snapshot,
+                        conversationId: conversationId,
+                        modelContext: modelContext
+                    )
+                }
+            }
+    }
+
+    func stopActionItemsListener(conversationId: String) {
+        actionItemsListeners[conversationId]?.remove()
+        actionItemsListeners.removeValue(forKey: conversationId)
+        actionItemsModelContexts.removeValue(forKey: conversationId)
+    }
+
+    func stopAllActionItemsListeners() {
+        for (conversationId, _) in actionItemsListeners {
+            stopActionItemsListener(conversationId: conversationId)
+        }
+    }
+
+    private func handleActionItemSnapshot(
+        _ snapshot: QuerySnapshot?,
+        conversationId: String,
+        modelContext: ModelContext
+    ) async {
+        guard let snapshot else { return }
+
+        for change in snapshot.documentChanges {
+            let data = change.document.data()
+            let actionItemId = change.document.documentID
+
+            var descriptor = FetchDescriptor<ActionItemEntity>(
+                predicate: #Predicate<ActionItemEntity> { item in
+                    item.id == actionItemId
+                }
+            )
+            descriptor.fetchLimit = 1
+
+            let task = data["task"] as? String ?? ""
+            let assignedTo = data["assignedTo"] as? String
+            let dueDate = (data["dueDate"] as? Timestamp)?.dateValue()
+            let priorityRaw = data["priority"] as? String ?? "medium"
+            let statusRaw = data["status"] as? String ?? "pending"
+            let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
+            let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
+
+            let priority = ActionItemPriority(rawValue: priorityRaw) ?? .medium
+            let status = ActionItemStatus(rawValue: statusRaw) ?? .pending
+
+            switch change.type {
+            case .added, .modified:
+                if let existing = try? modelContext.fetch(descriptor).first {
+                    existing.task = task
+                    existing.assignedTo = assignedTo
+                    existing.dueDate = dueDate
+                    existing.priority = priority
+                    existing.status = status
+                    existing.updatedAt = updatedAt
+                } else {
+                    let newItem = ActionItemEntity(
+                        id: actionItemId,
+                        conversationId: conversationId,
+                        task: task,
+                        assignedTo: assignedTo,
+                        dueDate: dueDate,
+                        priority: priority,
+                        status: status,
+                        createdAt: createdAt,
+                        updatedAt: updatedAt
+                    )
+                    modelContext.insert(newItem)
+                }
+            case .removed:
+                if let existing = try? modelContext.fetch(descriptor).first {
+                    modelContext.delete(existing)
+                }
+            }
+        }
+
+        do {
+            try modelContext.save()
+        } catch {
+            debugLog("Failed to persist action items: \(error.localizedDescription)")
+        }
+    }
+
+    func startDecisionsListener(conversationId: String, modelContext: ModelContext) {
+        decisionsModelContexts[conversationId] = modelContext
+
+        decisionsListeners[conversationId]?.remove()
+        decisionsListeners[conversationId] = db.collection("conversations")
+            .document(conversationId)
+            .collection("decisions")
+            .addSnapshotListener { [weak self] snapshot, error in
+                guard let self else { return }
+                if let error {
+                    self.debugLog("Decisions listener error: \(error.localizedDescription)")
+                    return
+                }
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    await self.handleDecisionSnapshot(
+                        snapshot,
+                        conversationId: conversationId,
+                        modelContext: modelContext
+                    )
+                }
+            }
+    }
+
+    func stopDecisionsListener(conversationId: String) {
+        decisionsListeners[conversationId]?.remove()
+        decisionsListeners.removeValue(forKey: conversationId)
+        decisionsModelContexts.removeValue(forKey: conversationId)
+    }
+
+    func stopAllDecisionsListeners() {
+        for (conversationId, _) in decisionsListeners {
+            stopDecisionsListener(conversationId: conversationId)
+        }
+    }
+
+    private func handleDecisionSnapshot(
+        _ snapshot: QuerySnapshot?,
+        conversationId: String,
+        modelContext: ModelContext
+    ) async {
+        guard let snapshot else { return }
+
+        for change in snapshot.documentChanges {
+            let data = change.document.data()
+            let decisionId = change.document.documentID
+
+            var descriptor = FetchDescriptor<DecisionEntity>(
+                predicate: #Predicate<DecisionEntity> { decision in
+                    decision.id == decisionId
+                }
+            )
+            descriptor.fetchLimit = 1
+
+            let decisionText = data["decisionText"] as? String ?? ""
+            let contextSummary = data["contextSummary"] as? String ?? ""
+            let participantIds = data["participantIds"] as? [String] ?? []
+            let decidedAt = (data["decidedAt"] as? Timestamp)?.dateValue() ?? Date()
+            let followUpStatusRaw = data["followUpStatus"] as? String ?? "pending"
+            let confidenceScore = data["confidenceScore"] as? Double ?? 0.0
+            let reminderDate = (data["reminderDate"] as? Timestamp)?.dateValue()
+            let createdAt = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
+            let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
+
+            let followUpStatus = DecisionFollowUpStatus(rawValue: followUpStatusRaw) ?? .pending
+
+            switch change.type {
+            case .added, .modified:
+                if let existing = try? modelContext.fetch(descriptor).first {
+                    existing.decisionText = decisionText
+                    existing.contextSummary = contextSummary
+                    existing.participantIds = participantIds
+                    existing.decidedAt = decidedAt
+                    existing.followUpStatus = followUpStatus
+                    existing.confidenceScore = confidenceScore
+                    existing.reminderDate = reminderDate
+                    existing.updatedAt = updatedAt
+                } else {
+                    let newDecision = DecisionEntity(
+                        id: decisionId,
+                        conversationId: conversationId,
+                        decisionText: decisionText,
+                        contextSummary: contextSummary,
+                        participantIds: participantIds,
+                        decidedAt: decidedAt,
+                        followUpStatus: followUpStatus,
+                        confidenceScore: confidenceScore,
+                        reminderDate: reminderDate,
+                        createdAt: createdAt,
+                        updatedAt: updatedAt
+                    )
+                    modelContext.insert(newDecision)
+                }
+            case .removed:
+                if let existing = try? modelContext.fetch(descriptor).first {
+                    modelContext.delete(existing)
+                }
+            }
+        }
+
+        do {
+            try modelContext.save()
+        } catch {
+            debugLog("Failed to persist decisions: \(error.localizedDescription)")
+        }
+    }
+
     private func debugLog(_ message: String) {
         #if DEBUG
         print("[FirestoreService]", message)
@@ -334,5 +547,260 @@ final class FirestoreService {
         debugLog("Deleting bots via Firebase Function...")
         _ = try await functions.httpsCallable("deleteBots").call()
         debugLog("Bots deleted successfully")
+    }
+
+    // MARK: - Action Items Management
+
+    /// Create a new action item in Firestore
+    /// - Parameters:
+    ///   - conversationId: The conversation this action item belongs to
+    ///   - actionItemId: Unique identifier for the action item
+    ///   - task: The task description
+    ///   - priority: Task priority
+    ///   - status: Task status
+    ///   - assignedTo: Optional user assigned to this task
+    ///   - dueDate: Optional due date
+    /// - Throws: Firestore errors
+    func createActionItem(
+        conversationId: String,
+        actionItemId: String,
+        task: String,
+        priority: ActionItemPriority,
+        status: ActionItemStatus,
+        assignedTo: String?,
+        dueDate: Date?
+    ) async throws {
+        let actionItemRef = db.collection("conversations")
+            .document(conversationId)
+            .collection("actionItems")
+            .document(actionItemId)
+
+        var data: [String: Any] = [
+            "task": task,
+            "priority": priority.rawValue,
+            "status": status.rawValue,
+            "createdAt": FieldValue.serverTimestamp(),
+            "updatedAt": FieldValue.serverTimestamp()
+        ]
+
+        if let assignedTo = assignedTo {
+            data["assignedTo"] = assignedTo
+        }
+
+        if let dueDate = dueDate {
+            data["dueDate"] = Timestamp(date: dueDate)
+        }
+
+        try await actionItemRef.setData(data)
+        debugLog("Created action item: \(actionItemId)")
+    }
+
+    /// Update an existing action item in Firestore
+    /// - Parameters:
+    ///   - conversationId: The conversation this action item belongs to
+    ///   - actionItemId: The action item to update
+    ///   - task: Updated task description
+    ///   - priority: Updated priority
+    ///   - status: Updated status
+    ///   - assignedTo: Updated assignee (nil to remove)
+    ///   - dueDate: Updated due date (nil to remove)
+    /// - Throws: Firestore errors
+    func updateActionItem(
+        conversationId: String,
+        actionItemId: String,
+        task: String,
+        priority: ActionItemPriority,
+        status: ActionItemStatus,
+        assignedTo: String?,
+        dueDate: Date?
+    ) async throws {
+        let actionItemRef = db.collection("conversations")
+            .document(conversationId)
+            .collection("actionItems")
+            .document(actionItemId)
+
+        var data: [String: Any] = [
+            "task": task,
+            "priority": priority.rawValue,
+            "status": status.rawValue,
+            "updatedAt": FieldValue.serverTimestamp()
+        ]
+
+        if let assignedTo = assignedTo {
+            data["assignedTo"] = assignedTo
+        } else {
+            data["assignedTo"] = FieldValue.delete()
+        }
+
+        if let dueDate = dueDate {
+            data["dueDate"] = Timestamp(date: dueDate)
+        } else {
+            data["dueDate"] = FieldValue.delete()
+        }
+
+        try await actionItemRef.setData(data, merge: true)
+        debugLog("Updated action item: \(actionItemId)")
+    }
+
+    /// Delete an action item from Firestore
+    /// - Parameters:
+    ///   - conversationId: The conversation this action item belongs to
+    ///   - actionItemId: The action item to delete
+    /// - Throws: Firestore errors
+    func deleteActionItem(conversationId: String, actionItemId: String) async throws {
+        let actionItemRef = db.collection("conversations")
+            .document(conversationId)
+            .collection("actionItems")
+            .document(actionItemId)
+
+        try await actionItemRef.delete()
+        debugLog("Deleted action item: \(actionItemId)")
+    }
+
+    // MARK: - Decisions Management
+
+    /// Update a decision's follow-up status in Firestore
+    /// - Parameters:
+    ///   - conversationId: The conversation this decision belongs to
+    ///   - decisionId: The decision to update
+    ///   - followUpStatus: New follow-up status
+    /// - Throws: Firestore errors
+    func updateDecisionStatus(
+        conversationId: String,
+        decisionId: String,
+        followUpStatus: DecisionFollowUpStatus
+    ) async throws {
+        let decisionRef = db.collection("conversations")
+            .document(conversationId)
+            .collection("decisions")
+            .document(decisionId)
+
+        let data: [String: Any] = [
+            "followUpStatus": followUpStatus.rawValue,
+            "updatedAt": FieldValue.serverTimestamp()
+        ]
+
+        try await decisionRef.setData(data, merge: true)
+        debugLog("Updated decision status: \(decisionId)")
+    }
+
+    /// Update a decision's reminder date in Firestore
+    /// - Parameters:
+    ///   - conversationId: The conversation this decision belongs to
+    ///   - decisionId: The decision to update
+    ///   - reminderDate: New reminder date (nil to clear)
+    /// - Throws: Firestore errors
+    func updateDecisionReminder(
+        conversationId: String,
+        decisionId: String,
+        reminderDate: Date?
+    ) async throws {
+        let decisionRef = db.collection("conversations")
+            .document(conversationId)
+            .collection("decisions")
+            .document(decisionId)
+
+        var data: [String: Any] = [
+            "updatedAt": FieldValue.serverTimestamp()
+        ]
+
+        if let reminderDate = reminderDate {
+            data["reminderDate"] = Timestamp(date: reminderDate)
+        } else {
+            data["reminderDate"] = FieldValue.delete()
+        }
+
+        try await decisionRef.setData(data, merge: true)
+        debugLog("Updated decision reminder: \(decisionId)")
+    }
+
+    /// Create a new decision in Firestore
+    /// - Parameters:
+    ///   - conversationId: The conversation this decision belongs to
+    ///   - decisionId: Unique identifier for the decision
+    ///   - decisionText: The decision text
+    ///   - contextSummary: Context summary
+    ///   - participantIds: Participant IDs
+    ///   - decidedAt: When the decision was made
+    ///   - followUpStatus: Follow-up status
+    ///   - confidenceScore: Confidence score
+    /// - Throws: Firestore errors
+    func createDecision(
+        conversationId: String,
+        decisionId: String,
+        decisionText: String,
+        contextSummary: String,
+        participantIds: [String],
+        decidedAt: Date,
+        followUpStatus: DecisionFollowUpStatus,
+        confidenceScore: Double
+    ) async throws {
+        let decisionRef = db.collection("conversations")
+            .document(conversationId)
+            .collection("decisions")
+            .document(decisionId)
+
+        let data: [String: Any] = [
+            "decisionText": decisionText,
+            "contextSummary": contextSummary,
+            "participantIds": participantIds,
+            "decidedAt": Timestamp(date: decidedAt),
+            "followUpStatus": followUpStatus.rawValue,
+            "confidenceScore": confidenceScore,
+            "createdAt": FieldValue.serverTimestamp(),
+            "updatedAt": FieldValue.serverTimestamp()
+        ]
+
+        try await decisionRef.setData(data)
+        debugLog("Created decision: \(decisionId)")
+    }
+
+    /// Update a decision in Firestore
+    /// - Parameters:
+    ///   - conversationId: The conversation this decision belongs to
+    ///   - decisionId: The decision to update
+    ///   - decisionText: Updated decision text
+    ///   - contextSummary: Updated context summary
+    ///   - decidedAt: Updated decided at date
+    ///   - followUpStatus: Updated follow-up status
+    /// - Throws: Firestore errors
+    func updateDecision(
+        conversationId: String,
+        decisionId: String,
+        decisionText: String,
+        contextSummary: String,
+        decidedAt: Date,
+        followUpStatus: DecisionFollowUpStatus
+    ) async throws {
+        let decisionRef = db.collection("conversations")
+            .document(conversationId)
+            .collection("decisions")
+            .document(decisionId)
+
+        let data: [String: Any] = [
+            "decisionText": decisionText,
+            "contextSummary": contextSummary,
+            "decidedAt": Timestamp(date: decidedAt),
+            "followUpStatus": followUpStatus.rawValue,
+            "updatedAt": FieldValue.serverTimestamp()
+        ]
+
+        try await decisionRef.setData(data, merge: true)
+        debugLog("Updated decision: \(decisionId)")
+    }
+
+    /// Delete a decision from Firestore
+    /// - Parameters:
+    ///   - conversationId: The conversation this decision belongs to
+    ///   - decisionId: The decision to delete
+    /// - Throws: Firestore errors
+    func deleteDecision(conversationId: String, decisionId: String) async throws {
+        let decisionRef = db.collection("conversations")
+            .document(conversationId)
+            .collection("decisions")
+            .document(decisionId)
+
+        try await decisionRef.delete()
+        debugLog("Deleted decision: \(decisionId)")
     }
 }

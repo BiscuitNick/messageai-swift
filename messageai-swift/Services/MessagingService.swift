@@ -34,6 +34,9 @@ final class MessagingService {
     private var notificationService: NotificationService?
     private var isAppInForeground: Bool = true
 
+    // AI Features Callback
+    var onMessageMutation: ((String, String) -> Void)?  // (conversationId, messageId)
+
     init(db: Firestore = Firestore.firestore()) {
         self.db = db
     }
@@ -58,6 +61,7 @@ final class MessagingService {
         pendingMessageTasks.values.forEach { $0.cancel() }
         pendingMessageTasks.removeAll()
         currentUserId = nil
+        onMessageMutation = nil
     }
 
     func createConversation(with participants: [String], isGroup: Bool = false, groupName: String? = nil) async throws -> String {
@@ -644,6 +648,9 @@ final class MessagingService {
         modelContext.insert(optimisticMessage)
         try? modelContext.save()
 
+        // Notify AI Features of new message
+        onMessageMutation?(conversationId, messageId)
+
         let conversationRef = db.collection("conversations").document(conversationId)
         let messageRef = conversationRef.collection("messages").document(messageId)
 
@@ -700,6 +707,9 @@ final class MessagingService {
 
         let timestamp = Date()
         let messageId = UUID().uuidString
+
+        // Notify AI Features of new bot message
+        onMessageMutation?(conversationId, messageId)
 
         // Create optimistic local message for immediate UI update
         let optimisticMessage = MessageEntity(
@@ -972,6 +982,12 @@ final class MessagingService {
             }()
             let finalStatus: DeliveryStatus = shouldMarkDelivered ? .delivered : status
 
+            // Parse priority metadata
+            let priorityScore = data["priorityScore"] as? Int
+            let priorityLabel = data["priorityLabel"] as? String
+            let priorityRationale = data["priorityRationale"] as? String
+            let priorityAnalyzedAt = (data["priorityAnalyzedAt"] as? Timestamp)?.dateValue()
+
             var descriptor = FetchDescriptor<MessageEntity>(
                 predicate: #Predicate<MessageEntity> { message in
                     message.id == messageId
@@ -987,6 +1003,10 @@ final class MessagingService {
                     existing.deliveryStatus = finalStatus
                     existing.readReceipts = readReceipts
                     existing.updatedAt = updatedAt
+                    existing.priorityScore = priorityScore
+                    existing.priorityLabel = priorityLabel
+                    existing.priorityRationale = priorityRationale
+                    existing.priorityAnalyzedAt = priorityAnalyzedAt
                 } else {
                     let message = MessageEntity(
                         id: messageId,
@@ -996,7 +1016,11 @@ final class MessagingService {
                         timestamp: timestamp,
                         deliveryStatus: finalStatus,
                         readReceipts: readReceipts,
-                        updatedAt: updatedAt
+                        updatedAt: updatedAt,
+                        priorityScore: priorityScore,
+                        priorityLabel: priorityLabel,
+                        priorityRationale: priorityRationale,
+                        priorityAnalyzedAt: priorityAnalyzedAt
                     )
                     modelContext.insert(message)
                 }
