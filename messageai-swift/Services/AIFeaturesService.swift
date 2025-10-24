@@ -1126,7 +1126,7 @@ final class AIFeaturesService {
     /// Save meeting suggestions to local SwiftData storage
     /// - Parameter response: The meeting suggestions response to save
     /// - Throws: SwiftData persistence errors
-    private func saveMeetingSuggestions(response: MeetingSuggestionsResponse) throws {
+    func saveMeetingSuggestions(response: MeetingSuggestionsResponse) throws {
         guard let modelContext = modelContext else {
             throw AIFeaturesError.notConfigured
         }
@@ -1249,7 +1249,7 @@ final class AIFeaturesService {
 
         do {
             // Track interaction in analytics/meetingSuggestions/interactions subcollection
-            let analyticsRef = firestoreService.db
+            let analyticsRef = firestoreService.firestore
                 .collection("analytics")
                 .document("meetingSuggestions")
                 .collection("interactions")
@@ -1263,7 +1263,7 @@ final class AIFeaturesService {
             ])
 
             // Also increment counter for this action type
-            let summaryRef = firestoreService.db
+            let summaryRef = firestoreService.firestore
                 .collection("analytics")
                 .document("meetingSuggestions")
 
@@ -1404,19 +1404,12 @@ final class AIFeaturesService {
         operation: @escaping () async throws -> T,
         onComplete: @escaping @MainActor (Result<T, Error>) -> Void
     ) {
-        Task.detached { [weak self] in
+        Task.detached {
             do {
                 let result = try await operation()
-                await MainActor.run {
-                    guard self != nil else { return }
-                    onComplete(.success(result))
-                }
+                await onComplete(.success(result))
             } catch {
-                await MainActor.run {
-                    guard let self = self else { return }
-                    self.errorMessage = error.localizedDescription
-                    onComplete(.failure(error))
-                }
+                await onComplete(.failure(error))
             }
         }
     }
@@ -1427,9 +1420,9 @@ final class AIFeaturesService {
             // This is where the actual AI callable would be invoked
             // For now, return a placeholder
             return "Analysis placeholder"
-        } onComplete: { [weak self] result in
+        } onComplete: { @MainActor [weak self] result in
             // MainActor-isolated completion handler
-            guard let self = self else { return }
+            guard let self else { return }
             switch result {
             case .success(let analysis):
                 #if DEBUG
@@ -1441,6 +1434,7 @@ final class AIFeaturesService {
                 #if DEBUG
                 print("[AIFeaturesService] Background analysis failed: \(error)")
                 #endif
+                self.errorMessage = error.localizedDescription
             }
         }
     }

@@ -14,6 +14,7 @@ final class ThreadSummaryPersistenceTests: XCTestCase {
 
     var service: AIFeaturesService!
     var modelContext: ModelContext!
+    var networkMonitor: NetworkMonitor!
 
     override func setUp() async throws {
         try await super.setUp()
@@ -31,18 +32,21 @@ final class ThreadSummaryPersistenceTests: XCTestCase {
         let container = try ModelContainer(for: schema, configurations: [modelConfiguration])
         modelContext = ModelContext(container)
 
+        networkMonitor = NetworkMonitor()
         service = AIFeaturesService()
         service.configure(
             modelContext: modelContext,
             authService: AuthService(),
             messagingService: MessagingService(),
-            firestoreService: FirestoreService()
+            firestoreService: FirestoreService(),
+            networkMonitor: networkMonitor
         )
     }
 
     override func tearDown() async throws {
         service = nil
         modelContext = nil
+        networkMonitor = nil
         try await super.tearDown()
     }
 

@@ -1245,8 +1245,8 @@ final class AIFeaturesServiceTests: XCTestCase {
         let conversation = ConversationEntity(
             id: conversationId,
             participantIds: ["user1", "user2"],
-            lastMessageAt: Date(),
-            lastMessagePreview: "Let's meet tomorrow"
+            lastMessage: "Let's meet tomorrow",
+            lastMessageTimestamp: Date()
         )
         modelContext.insert(conversation)
 
@@ -1254,7 +1254,7 @@ final class AIFeaturesServiceTests: XCTestCase {
             id: "msg-offline",
             conversationId: conversationId,
             senderId: "user1",
-            content: "Let's meet tomorrow at 2pm",
+            text: "Let's meet tomorrow at 2pm",
             timestamp: Date(),
             schedulingIntent: "high",
             intentConfidence: 0.85,
@@ -1288,8 +1288,8 @@ final class AIFeaturesServiceTests: XCTestCase {
         let conversation = ConversationEntity(
             id: conversationId,
             participantIds: ["user1", "user2"],
-            lastMessageAt: Date(),
-            lastMessagePreview: "Meeting suggestion"
+            lastMessage: "Meeting suggestion",
+            lastMessageTimestamp: Date()
         )
         modelContext.insert(conversation)
 
@@ -1297,7 +1297,7 @@ final class AIFeaturesServiceTests: XCTestCase {
             id: "msg-reconnect",
             conversationId: conversationId,
             senderId: "user1",
-            content: "Let's schedule a call",
+            text: "Let's schedule a call",
             timestamp: Date(),
             schedulingIntent: "medium",
             intentConfidence: 0.75,
@@ -1338,8 +1338,8 @@ final class AIFeaturesServiceTests: XCTestCase {
         let conversation = ConversationEntity(
             id: conversationId,
             participantIds: ["user1", "user2"],
-            lastMessageAt: Date(),
-            lastMessagePreview: "Scheduling message"
+            lastMessage: "Scheduling message",
+            lastMessageTimestamp: Date()
         )
         modelContext.insert(conversation)
 
@@ -1347,7 +1347,7 @@ final class AIFeaturesServiceTests: XCTestCase {
             id: "msg-snoozed-offline",
             conversationId: conversationId,
             senderId: "user1",
-            content: "Can we meet?",
+            text: "Can we meet?",
             timestamp: Date(),
             schedulingIntent: "high",
             intentConfidence: 0.90,
@@ -1380,8 +1380,8 @@ final class AIFeaturesServiceTests: XCTestCase {
         let conversation = ConversationEntity(
             id: conversationId,
             participantIds: ["user1", "user2"],
-            lastMessageAt: Date(),
-            lastMessagePreview: "Meeting"
+            lastMessage: "Meeting",
+            lastMessageTimestamp: Date()
         )
         modelContext.insert(conversation)
 
@@ -1390,7 +1390,7 @@ final class AIFeaturesServiceTests: XCTestCase {
             id: "msg-debounce-1",
             conversationId: conversationId,
             senderId: "user1",
-            content: "Let's meet",
+            text: "Let's meet",
             timestamp: Date(),
             schedulingIntent: "high",
             intentConfidence: 0.85,

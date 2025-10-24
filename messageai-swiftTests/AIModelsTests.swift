@@ -42,7 +42,7 @@ final class AIModelsTests: XCTestCase {
         let json = """
         {
             "id": "action-1",
-            "description": "Complete budget report",
+            "task": "Complete budget report",
             "assigned_to": "user-123",
             "due_date": "2024-01-20T17:00:00Z",
             "priority": "high",
@@ -59,7 +59,7 @@ final class AIModelsTests: XCTestCase {
         let actionItem = try decoder.decode(ActionItem.self, from: data)
 
         XCTAssertEqual(actionItem.id, "action-1")
-        XCTAssertEqual(actionItem.description, "Complete budget report")
+        XCTAssertEqual(actionItem.task, "Complete budget report")
         XCTAssertEqual(actionItem.assignedTo, "user-123")
         XCTAssertNotNil(actionItem.dueDate)
         XCTAssertEqual(actionItem.priority, .high)
@@ -183,26 +183,17 @@ final class AIModelsTests: XCTestCase {
         XCTAssertEqual(DecisionStatus.cancelled.rawValue, "cancelled")
     }
 
-    // MARK: - MeetingSuggestion Tests
+    // MARK: - MeetingTimeSuggestion Tests
 
-    func testMeetingSuggestionDecoding() throws {
+    func testMeetingTimeSuggestionDecoding() throws {
         let json = """
         {
-            "id": "meeting-1",
-            "proposed_times": [
-                {
-                    "id": "slot-1",
-                    "start_time": "2024-01-20T14:00:00Z",
-                    "end_time": "2024-01-20T15:00:00Z",
-                    "timezone": "America/New_York",
-                    "availability_score": 0.95
-                }
-            ],
-            "conversation_id": "conv-123",
-            "participants": ["user-1", "user-2"],
-            "reason": "Discussion needed about project timeline",
-            "confidence": 0.88,
-            "generated_at": "2024-01-15T10:30:00Z"
+            "startTime": "2024-01-20T14:00:00Z",
+            "endTime": "2024-01-20T15:00:00Z",
+            "score": 0.95,
+            "justification": "Good availability across team",
+            "dayOfWeek": "Friday",
+            "timeOfDay": "afternoon"
         }
         """
 
@@ -210,14 +201,46 @@ final class AIModelsTests: XCTestCase {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
 
-        let suggestion = try decoder.decode(MeetingSuggestion.self, from: data)
+        let suggestion = try decoder.decode(MeetingTimeSuggestion.self, from: data)
 
-        XCTAssertEqual(suggestion.id, "meeting-1")
-        XCTAssertEqual(suggestion.proposedTimes.count, 1)
-        XCTAssertEqual(suggestion.proposedTimes[0].id, "slot-1")
-        XCTAssertEqual(suggestion.proposedTimes[0].timezone, "America/New_York")
-        XCTAssertEqual(suggestion.participants.count, 2)
-        XCTAssertEqual(suggestion.confidence, 0.88, accuracy: 0.001)
+        XCTAssertNotNil(suggestion.id)
+        XCTAssertEqual(suggestion.score, 0.95, accuracy: 0.001)
+        XCTAssertEqual(suggestion.justification, "Good availability across team")
+        XCTAssertEqual(suggestion.dayOfWeek, "Friday")
+        XCTAssertEqual(suggestion.timeOfDay, .afternoon)
+    }
+
+    func testMeetingSuggestionsResponseDecoding() throws {
+        let json = """
+        {
+            "suggestions": [
+                {
+                    "startTime": "2024-01-20T14:00:00Z",
+                    "endTime": "2024-01-20T15:00:00Z",
+                    "score": 0.95,
+                    "justification": "Good availability",
+                    "dayOfWeek": "Friday",
+                    "timeOfDay": "afternoon"
+                }
+            ],
+            "conversation_id": "conv-123",
+            "duration_minutes": 60,
+            "participant_count": 3,
+            "generated_at": "2024-01-15T10:30:00Z",
+            "expires_at": "2024-01-22T10:30:00Z"
+        }
+        """
+
+        let data = json.data(using: .utf8)!
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        let response = try decoder.decode(MeetingSuggestionsResponse.self, from: data)
+
+        XCTAssertEqual(response.suggestions.count, 1)
+        XCTAssertEqual(response.conversationId, "conv-123")
+        XCTAssertEqual(response.durationMinutes, 60)
+        XCTAssertEqual(response.participantCount, 3)
     }
 
     // MARK: - SchedulingIntent Tests

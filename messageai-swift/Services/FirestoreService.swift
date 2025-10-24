@@ -21,6 +21,11 @@ final class FirestoreService {
 
     private let db: Firestore
     private let functions: Functions
+
+    /// Internal accessor for Firestore database (for use by other services)
+    var firestore: Firestore {
+        db
+    }
     @ObservationIgnored private var usersListener: ListenerRegistration?
     @ObservationIgnored private var userModelContext: ModelContext?
     @ObservationIgnored private var botsListener: ListenerRegistration?
