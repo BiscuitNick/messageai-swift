@@ -29,23 +29,25 @@ struct ThreadSummaryResponse: Codable {
 
 struct ActionItem: Codable, Identifiable {
     let id: String
-    let description: String
+    let task: String
     let assignedTo: String?
-    let dueDate: Date?
+    let dueDate: String?
     let priority: ActionItemPriority
     let status: ActionItemStatus
     let conversationId: String
-    let createdAt: Date
+    let createdAt: String
+    let updatedAt: String
 
     enum CodingKeys: String, CodingKey {
         case id
-        case description
+        case task
         case assignedTo = "assigned_to"
         case dueDate = "due_date"
         case priority
         case status
         case conversationId = "conversation_id"
         case createdAt = "created_at"
+        case updatedAt = "updated_at"
     }
 }
 
@@ -66,12 +68,14 @@ enum ActionItemStatus: String, Codable {
 struct ActionItemsResponse: Codable {
     let items: [ActionItem]
     let conversationId: String
-    let extractedAt: Date
+    let windowDays: Int
+    let messageCount: Int
 
     enum CodingKeys: String, CodingKey {
-        case items
+        case items = "action_items"
         case conversationId = "conversation_id"
-        case extractedAt = "extracted_at"
+        case windowDays = "window_days"
+        case messageCount = "message_count"
     }
 }
 

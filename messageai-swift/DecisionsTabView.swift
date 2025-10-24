@@ -135,7 +135,7 @@ struct DecisionsTabView: View {
                 .padding(.horizontal)
 
             Button("Track Decisions") {
-                trackDecisions()
+                recordDecisions()
             }
             .buttonStyle(.borderedProminent)
         }
@@ -178,7 +178,7 @@ struct DecisionsTabView: View {
 
                 // Refresh button at bottom
                 Button {
-                    trackDecisions()
+                    recordDecisions()
                 } label: {
                     HStack {
                         Image(systemName: "arrow.clockwise")
@@ -191,16 +191,16 @@ struct DecisionsTabView: View {
         }
     }
 
-    private func trackDecisions() {
+    private func recordDecisions() {
         isTracking = true
         Task {
             do {
-                _ = try await aiFeaturesService.trackDecisions(
+                _ = try await aiFeaturesService.recordDecisions(
                     conversationId: conversationId,
                     windowDays: 30
                 )
             } catch {
-                print("[DecisionsTabView] Failed to track: \(error)")
+                print("[DecisionsTabView] Failed to record: \(error)")
             }
             isTracking = false
         }

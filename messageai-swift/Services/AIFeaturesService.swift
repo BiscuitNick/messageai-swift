@@ -8,6 +8,7 @@
 import Foundation
 import FirebaseFirestore
 import FirebaseFunctions
+import FirebaseAuth
 import SwiftData
 
 /// Centralized service for orchestrating AI workflows via Firebase functions
@@ -149,6 +150,17 @@ final class AIFeaturesService {
         }
 
         do {
+            // Force token refresh to ensure Firebase Auth has a valid token
+            // This token is automatically attached to the Cloud Function request
+            if let currentUser = Auth.auth().currentUser {
+                do {
+                    _ = try await currentUser.getIDToken(forcingRefresh: true)
+                } catch {
+                    print("[AIFeaturesService] Token refresh failed: \(error.localizedDescription)")
+                    // Continue anyway - might still work with cached token
+                }
+            }
+
             let result = try await functions.httpsCallable(name).call(payload)
 
             guard let data = result.data as? [String: Any] else {
@@ -156,12 +168,40 @@ final class AIFeaturesService {
             }
 
             let jsonData = try JSONSerialization.data(withJSONObject: data)
-            let decoded = try JSONDecoder().decode(T.self, from: jsonData)
+
+            // Configure decoder to handle ISO8601 date strings from backend
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let decoded = try decoder.decode(T.self, from: jsonData)
 
             return decoded
         } catch {
-            errorMessage = error.localizedDescription
+            let detailedError: String
+            if let decodingError = error as? DecodingError {
+                detailedError = formatDecodingError(decodingError)
+                print("[AIFeaturesService] Decoding error for '\(name)': \(detailedError)")
+            } else {
+                detailedError = error.localizedDescription
+                print("[AIFeaturesService] Error calling '\(name)': \(detailedError)")
+            }
+            errorMessage = detailedError
             throw error
+        }
+    }
+
+    /// Format a DecodingError into a human-readable message
+    private func formatDecodingError(_ error: DecodingError) -> String {
+        switch error {
+        case .typeMismatch(let type, let context):
+            return "Type mismatch for \(type) at \(context.codingPath.map { $0.stringValue }.joined(separator: ".")): \(context.debugDescription)"
+        case .valueNotFound(let type, let context):
+            return "Missing value for \(type) at \(context.codingPath.map { $0.stringValue }.joined(separator: ".")): \(context.debugDescription)"
+        case .keyNotFound(let key, let context):
+            return "Missing key '\(key.stringValue)' at \(context.codingPath.map { $0.stringValue }.joined(separator: ".")): \(context.debugDescription)"
+        case .dataCorrupted(let context):
+            return "Data corrupted at \(context.codingPath.map { $0.stringValue }.joined(separator: ".")): \(context.debugDescription)"
+        @unknown default:
+            return "Unknown decoding error: \(error.localizedDescription)"
         }
     }
 
@@ -337,7 +377,7 @@ final class AIFeaturesService {
     ///   - forceRefresh: Force a new summary even if cache is valid (default: false)
     /// - Returns: ThreadSummaryResponse with the generated summary
     /// - Throws: AIFeaturesError or network errors
-    func summarizeThread(
+    func summarizeThreadTask(
         conversationId: String,
         messageLimit: Int = 50,
         saveLocally: Bool = true,
@@ -396,7 +436,7 @@ final class AIFeaturesService {
             ]
 
             // Call the Firebase Cloud Function
-            let response: ThreadSummaryResponse = try await call("summarizeThread", payload: payload)
+            let response: ThreadSummaryResponse = try await call("summarizeThreadTask", payload: payload)
 
             // Update memory cache
             summaryCache[conversationId] = CachedSummary(response: response, cachedAt: Date())
@@ -495,7 +535,7 @@ final class AIFeaturesService {
     ///   - windowDays: Number of days of message history to analyze (default: 30)
     /// - Returns: TrackedDecisionsResponse with the extracted decisions
     /// - Throws: AIFeaturesError or network errors
-    func trackDecisions(
+    func recordDecisions(
         conversationId: String,
         windowDays: Int = 30
     ) async throws -> TrackedDecisionsResponse {
@@ -519,7 +559,7 @@ final class AIFeaturesService {
             ]
 
             // Call the Firebase Cloud Function
-            let response: TrackedDecisionsResponse = try await call("trackDecisions", payload: payload)
+            let response: TrackedDecisionsResponse = try await call("recordDecisions", payload: payload)
 
             // Note: Firestore listener will automatically sync the decisions to SwiftData
             // The Cloud Function writes to Firestore, which triggers the listener in FirestoreService

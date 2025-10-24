@@ -27,6 +27,7 @@ struct ChatView: View {
     @Environment(FirestoreService.self) private var firestoreService
     @Environment(NetworkMonitor.self) private var networkMonitor
     @Environment(AIFeaturesService.self) private var aiFeaturesService
+    @Environment(\.modelContext) private var modelContext
 
     @State private var messageText: String = ""
     @State private var sendError: String?
@@ -127,9 +128,15 @@ struct ChatView: View {
         }
         .onAppear {
             notificationService.setActiveConversation(conversationId)
+            // Start Firestore listeners for AI features
+            firestoreService.startActionItemsListener(conversationId: conversationId, modelContext: modelContext)
+            firestoreService.startDecisionsListener(conversationId: conversationId, modelContext: modelContext)
         }
         .onDisappear {
             notificationService.setActiveConversation(nil)
+            // Stop Firestore listeners to prevent memory leaks
+            firestoreService.stopActionItemsListener(conversationId: conversationId)
+            firestoreService.stopDecisionsListener(conversationId: conversationId)
         }
         .sheet(isPresented: $showingSummary) {
             NavigationStack {
@@ -149,7 +156,7 @@ struct ChatView: View {
                         onRefresh: {
                             Task {
                                 do {
-                                    _ = try await aiFeaturesService.summarizeThread(
+                                    _ = try await aiFeaturesService.summarizeThreadTask(
                                         conversationId: conversationId,
                                         forceRefresh: true
                                     )
@@ -174,9 +181,15 @@ struct ChatView: View {
         }
         .onAppear {
             notificationService.setActiveConversation(conversationId)
+            // Start Firestore listeners for AI features
+            firestoreService.startActionItemsListener(conversationId: conversationId, modelContext: modelContext)
+            firestoreService.startDecisionsListener(conversationId: conversationId, modelContext: modelContext)
         }
         .onDisappear {
             notificationService.setActiveConversation(nil)
+            // Stop Firestore listeners to prevent memory leaks
+            firestoreService.stopActionItemsListener(conversationId: conversationId)
+            firestoreService.stopDecisionsListener(conversationId: conversationId)
         }
         .alert(
             "Unable to send message",

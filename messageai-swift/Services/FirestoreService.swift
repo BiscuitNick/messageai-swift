@@ -375,6 +375,8 @@ final class FirestoreService {
     func startDecisionsListener(conversationId: String, modelContext: ModelContext) {
         decisionsModelContexts[conversationId] = modelContext
 
+        debugLog("Starting decisions listener for conversation: \(conversationId)")
+
         decisionsListeners[conversationId]?.remove()
         decisionsListeners[conversationId] = db.collection("conversations")
             .document(conversationId)
@@ -385,6 +387,9 @@ final class FirestoreService {
                     self.debugLog("Decisions listener error: \(error.localizedDescription)")
                     return
                 }
+
+                self.debugLog("Decisions listener triggered with \(snapshot?.documents.count ?? 0) documents")
+
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     await self.handleDecisionSnapshot(
@@ -415,9 +420,13 @@ final class FirestoreService {
     ) async {
         guard let snapshot else { return }
 
+        debugLog("Processing \(snapshot.documentChanges.count) decision changes")
+
         for change in snapshot.documentChanges {
             let data = change.document.data()
             let decisionId = change.document.documentID
+
+            debugLog("Decision change: \(change.type.rawValue) - ID: \(decisionId)")
 
             var descriptor = FetchDescriptor<DecisionEntity>(
                 predicate: #Predicate<DecisionEntity> { decision in
@@ -441,6 +450,7 @@ final class FirestoreService {
             switch change.type {
             case .added, .modified:
                 if let existing = try? modelContext.fetch(descriptor).first {
+                    debugLog("Updating existing decision: \(decisionId)")
                     existing.decisionText = decisionText
                     existing.contextSummary = contextSummary
                     existing.participantIds = participantIds
@@ -450,6 +460,7 @@ final class FirestoreService {
                     existing.reminderDate = reminderDate
                     existing.updatedAt = updatedAt
                 } else {
+                    debugLog("Creating new decision: \(decisionId) - \(decisionText)")
                     let newDecision = DecisionEntity(
                         id: decisionId,
                         conversationId: conversationId,
@@ -467,6 +478,7 @@ final class FirestoreService {
                 }
             case .removed:
                 if let existing = try? modelContext.fetch(descriptor).first {
+                    debugLog("Removing decision: \(decisionId)")
                     modelContext.delete(existing)
                 }
             }
@@ -474,6 +486,7 @@ final class FirestoreService {
 
         do {
             try modelContext.save()
+            debugLog("Successfully saved \(snapshot.documentChanges.count) decision changes to SwiftData")
         } catch {
             debugLog("Failed to persist decisions: \(error.localizedDescription)")
         }

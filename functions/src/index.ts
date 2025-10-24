@@ -497,7 +497,7 @@ type SummarizeThreadRequest = {
   messageLimit?: number;
 };
 
-export const summarizeThread = onCall<SummarizeThreadRequest>(async (request) => {
+export const summarizeThreadTask = onCall<SummarizeThreadRequest>(async (request) => {
   const uid = requireAuth(request);
 
   const { conversationId, messageLimit = 50 } = request.data;
@@ -697,6 +697,7 @@ export const extractActionItems = onCall<ExtractActionItemsRequest>(async (reque
       .get();
 
     if (messagesSnapshot.empty) {
+      console.log(`[extractActionItems] No messages found in ${windowDays}-day window for conversation ${conversationId}`);
       return {
         action_items: [],
         conversation_id: conversationId,
@@ -704,6 +705,8 @@ export const extractActionItems = onCall<ExtractActionItemsRequest>(async (reque
         message_count: 0,
       };
     }
+
+    console.log(`[extractActionItems] Found ${messagesSnapshot.docs.length} messages in ${windowDays}-day window`);
 
     // Build message context with participant names
     const messages = messagesSnapshot.docs.map((doc) => doc.data());
@@ -760,6 +763,8 @@ Only extract genuine action items - ignore casual mentions or hypothetical discu
 
     const userPrompt = `Analyze the following conversation and extract all action items:\n\n${conversationText}`;
 
+    console.log(`[extractActionItems] Analyzing ${conversationText.split('\n').length} lines of conversation`);
+
     // Call OpenAI for action item extraction using Vercel AI SDK
     const { object: extractedData } = await generateObject({
       model: openai("gpt-4o-mini"),
@@ -768,6 +773,8 @@ Only extract genuine action items - ignore casual mentions or hypothetical discu
       schema: actionItemsResponseSchema,
       temperature: 0.2, // Lower temperature for more deterministic extraction
     });
+
+    console.log(`[extractActionItems] OpenAI found ${extractedData.actionItems.length} action items`);
 
     // Format response and persist to Firestore
     const actionItems = extractedData.actionItems.map((item, index) => ({
@@ -782,7 +789,7 @@ Only extract genuine action items - ignore casual mentions or hypothetical discu
       updated_at: new Date().toISOString(),
     }));
 
-    // Persist action items to Firestore subcollection
+    // Persist action items to Firestore subcollection with proper Timestamps
     const batch = firestore.batch();
     const actionItemsRef = conversationRef.collection("actionItems");
 
@@ -790,21 +797,32 @@ Only extract genuine action items - ignore casual mentions or hypothetical discu
       const itemRef = actionItemsRef.doc(actionItem.id);
       const existingDoc = await itemRef.get();
 
+      // Prepare Firestore data with Timestamps and camelCase field names for Swift
+      const firestoreData = {
+        task: actionItem.task,
+        assignedTo: actionItem.assigned_to,
+        dueDate: actionItem.due_date ? admin.firestore.Timestamp.fromDate(new Date(actionItem.due_date)) : null,
+        priority: actionItem.priority,
+        status: actionItem.status,
+        conversationId: actionItem.conversation_id,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+
       if (existingDoc.exists) {
         // Update existing action item, preserving created_at
-        const existingData = existingDoc.data();
-        batch.set(itemRef, {
-          ...actionItem,
-          created_at: existingData?.created_at || actionItem.created_at,
-          updated_at: new Date().toISOString(),
-        }, { merge: true });
+        batch.set(itemRef, firestoreData, { merge: true });
       } else {
-        // Create new action item
-        batch.set(itemRef, actionItem);
+        // Create new action item with createdAt
+        batch.set(itemRef, {
+          ...firestoreData,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
       }
     }
 
     await batch.commit();
+
+    console.log(`[extractActionItems] Persisted ${actionItems.length} action items to Firestore`);
 
     return {
       action_items: actionItems,
@@ -1390,16 +1408,16 @@ type Decision = z.infer<typeof decisionSchema>;
 type DecisionsResponse = z.infer<typeof decisionsResponseSchema>;
 
 /**
- * Tracks decisions from a conversation using OpenAI
+ * Records decisions from a conversation using OpenAI
  */
-export const trackDecisions = onCall<{
+export const recordDecisions = onCall<{
   conversationId: string;
   windowDays?: number;
 }>(async (request) => {
   const uid = requireAuth(request);
   const { conversationId, windowDays = 30 } = request.data;
 
-  console.log(`[trackDecisions] Analyzing conversation ${conversationId} for decisions`);
+  console.log(`[recordDecisions] Analyzing conversation ${conversationId} for decisions`);
 
   try {
     // Verify user is a participant in the conversation
@@ -1434,7 +1452,7 @@ export const trackDecisions = onCall<{
       .get();
 
     if (messagesSnapshot.empty) {
-      console.log(`[trackDecisions] No messages in window for conversation ${conversationId}`);
+      console.log(`[recordDecisions] No messages in window for conversation ${conversationId}`);
       return { decisions: [] };
     }
 
@@ -1501,7 +1519,7 @@ Only include decisions with confidence >= 0.7`;
     // Filter decisions by confidence
     const highConfidenceDecisions = response.decisions.filter(d => d.confidenceScore >= 0.7);
 
-    console.log(`[trackDecisions] Found ${highConfidenceDecisions.length} high-confidence decisions`);
+    console.log(`[recordDecisions] Found ${highConfidenceDecisions.length} high-confidence decisions`);
 
     // Persist decisions to Firestore
     const decisionsCollection = firestore
@@ -1511,6 +1529,7 @@ Only include decisions with confidence >= 0.7`;
 
     const batch = firestore.batch();
     const persistedDecisions: Decision[] = [];
+    const skippedDecisions: Decision[] = [];
 
     for (const decision of highConfidenceDecisions) {
       // Create a hash for deduplication
@@ -1522,7 +1541,8 @@ Only include decisions with confidence >= 0.7`;
 
       // Skip if already exists
       if (decisionDoc.exists) {
-        console.log(`[trackDecisions] Decision ${docId} already exists, skipping`);
+        console.log(`[recordDecisions] Decision ${docId} already exists, skipping`);
+        skippedDecisions.push(decision);
         continue;
       }
 
@@ -1539,19 +1559,20 @@ Only include decisions with confidence >= 0.7`;
 
     await batch.commit();
 
-    console.log(`[trackDecisions] Persisted ${persistedDecisions.length} new decisions`);
+    console.log(`[recordDecisions] Persisted ${persistedDecisions.length} new decisions, skipped ${skippedDecisions.length} existing`);
 
     return {
-      decisions: persistedDecisions,
-      total: highConfidenceDecisions.length,
+      analyzed: highConfidenceDecisions.length,
       persisted: persistedDecisions.length,
+      skipped: skippedDecisions.length,
+      conversation_id: conversationId,
     };
   } catch (error) {
-    console.error("[trackDecisions] Error:", error);
+    console.error("[recordDecisions] Error:", error);
     if (error instanceof HttpsError) {
       throw error;
     }
-    throw new HttpsError("internal", "Failed to track decisions", error);
+    throw new HttpsError("internal", "Failed to record decisions", error);
   }
 });
 

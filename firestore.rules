@@ -74,6 +74,30 @@ service cloud.firestore {
 
         allow delete: if false;
       }
+
+      match /actionItems/{actionItemId} {
+        allow read: if isAuthenticated()
+          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
+
+        allow create, update: if isAuthenticated()
+          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data)
+          && request.resource.data.conversationId == conversationId;
+
+        allow delete: if isAuthenticated()
+          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
+      }
+
+      match /decisions/{decisionId} {
+        allow read: if isAuthenticated()
+          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
+
+        allow create, update: if isAuthenticated()
+          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data)
+          && request.resource.data.conversationId == conversationId;
+
+        allow delete: if isAuthenticated()
+          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
+      }
     }
   }
 }
