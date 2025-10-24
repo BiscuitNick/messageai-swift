@@ -214,51 +214,62 @@ struct TrackedDecisionsResponse: Codable {
 
 // MARK: - Meeting Suggestions DTOs
 
-struct MeetingSuggestion: Codable, Identifiable {
-    let id: String
-    let proposedTimes: [ProposedTime]
-    let conversationId: String
-    let participants: [String]
-    let reason: String
-    let confidence: Double
-    let generatedAt: Date
+struct MeetingTimeSuggestion: Codable, Identifiable {
+    var id: String { "\(startTime.ISO8601Format())-\(endTime.ISO8601Format())" }
+    let startTime: Date
+    let endTime: Date
+    let score: Double
+    let justification: String
+    let dayOfWeek: String
+    let timeOfDay: TimeOfDay
 
     enum CodingKeys: String, CodingKey {
-        case id
-        case proposedTimes = "proposed_times"
-        case conversationId = "conversation_id"
-        case participants
-        case reason
-        case confidence
-        case generatedAt = "generated_at"
+        case startTime = "startTime"
+        case endTime = "endTime"
+        case score
+        case justification
+        case dayOfWeek = "dayOfWeek"
+        case timeOfDay = "timeOfDay"
     }
 }
 
-struct ProposedTime: Codable, Identifiable {
-    let id: String
-    let startTime: Date
-    let endTime: Date
-    let timezone: String
-    let availabilityScore: Double
+enum TimeOfDay: String, Codable, CaseIterable, Sendable {
+    case morning
+    case afternoon
+    case evening
 
-    enum CodingKeys: String, CodingKey {
-        case id
-        case startTime = "start_time"
-        case endTime = "end_time"
-        case timezone
-        case availabilityScore = "availability_score"
+    var displayLabel: String {
+        switch self {
+        case .morning: return "Morning"
+        case .afternoon: return "Afternoon"
+        case .evening: return "Evening"
+        }
+    }
+
+    var emoji: String {
+        switch self {
+        case .morning: return "🌅"
+        case .afternoon: return "☀️"
+        case .evening: return "🌙"
+        }
     }
 }
 
 struct MeetingSuggestionsResponse: Codable {
-    let suggestions: [MeetingSuggestion]
+    let suggestions: [MeetingTimeSuggestion]
     let conversationId: String
+    let durationMinutes: Int
+    let participantCount: Int
     let generatedAt: Date
+    let expiresAt: Date
 
     enum CodingKeys: String, CodingKey {
         case suggestions
         case conversationId = "conversation_id"
+        case durationMinutes = "duration_minutes"
+        case participantCount = "participant_count"
         case generatedAt = "generated_at"
+        case expiresAt = "expires_at"
     }
 }
 

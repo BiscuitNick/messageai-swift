@@ -1576,6 +1576,477 @@ Only include decisions with confidence >= 0.7`;
   }
 });
 
+// ============================================================================
+// AI Feature: Scheduling Intent Detection
+// ============================================================================
+
+// Zod schema for scheduling intent classification
+const schedulingIntentSchema = z.object({
+  hasSchedulingIntent: z.boolean().describe("Whether the message contains scheduling language"),
+  confidence: z.number().min(0).max(1).describe("Confidence score 0-1"),
+  reasoning: z.string().describe("Brief explanation of the classification"),
+  suggestedKeywords: z.array(z.string()).optional().describe("Key scheduling-related phrases detected"),
+});
+
+type SchedulingIntentClassification = z.infer<typeof schedulingIntentSchema>;
+
+/**
+ * Default classification for messages without scheduling intent
+ */
+const DEFAULT_NO_INTENT: SchedulingIntentClassification = {
+  hasSchedulingIntent: false,
+  confidence: 0,
+  reasoning: "No scheduling language detected",
+  suggestedKeywords: [],
+};
+
+/**
+ * Checks if a message should be classified for scheduling intent
+ */
+function shouldClassifySchedulingIntent(messageData: FirebaseFirestore.DocumentData): boolean {
+  const senderId = messageData.senderId as string | undefined;
+  const text = messageData.text as string | undefined;
+
+  // Skip if no sender or text
+  if (!senderId || !text) {
+    return false;
+  }
+
+  // Skip bot messages (format: "bot:botId")
+  if (senderId.startsWith("bot:")) {
+    return false;
+  }
+
+  // Skip system messages
+  if (messageData.isSystemMessage === true) {
+    return false;
+  }
+
+  // Skip if already analyzed
+  if (messageData.schedulingIntentAnalyzedAt) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Classifies message for scheduling intent using OpenAI
+ */
+async function classifySchedulingIntent(messageText: string): Promise<SchedulingIntentClassification> {
+  const openai = createOpenAI({
+    apiKey: openaiApiKey.value(),
+  });
+
+  const systemPrompt = `You are a scheduling intent classifier. Analyze the given message and determine if it contains scheduling-related language or intent.
+
+Scheduling Intent Indicators:
+- Explicit scheduling requests: "let's meet", "schedule a call", "set up a meeting"
+- Time-based questions: "when are you free?", "what time works?", "available next week?"
+- Calendar references: "check my calendar", "book some time", "find a slot"
+- Coordination language: "let's sync up", "need to discuss", "catch up soon"
+- Deadline mentions: "by end of week", "before Friday", "need to talk today"
+
+Consider:
+- Direct scheduling requests (high confidence)
+- Implied scheduling needs (medium confidence)
+- Time-related questions without scheduling context (low confidence)
+- Casual mentions of time without coordination intent (no intent)
+
+Return:
+- hasSchedulingIntent: true if message shows scheduling coordination intent
+- confidence: 0-1 score (0.7+ for strong intent, 0.4-0.7 for possible intent, <0.4 for unlikely)
+- reasoning: Brief explanation
+- suggestedKeywords: Key phrases that indicate scheduling`;
+
+  const userPrompt = `Classify this message for scheduling intent:\n\n"${messageText}"`;
+
+  try {
+    const { object: classification } = await generateObject({
+      model: openai("gpt-4o-mini"),
+      system: systemPrompt,
+      prompt: userPrompt,
+      schema: schedulingIntentSchema,
+      temperature: 0.2, // Low temperature for consistent classification
+    });
+
+    return classification;
+  } catch (error) {
+    console.error("[classifySchedulingIntent] Error:", error);
+    return DEFAULT_NO_INTENT;
+  }
+}
+
+/**
+ * Firebase trigger: Detects scheduling intent in new messages
+ * Runs when a new message is created in any conversation
+ */
+export const detectSchedulingIntent = onDocumentCreated(
+  "conversations/{conversationId}/messages/{messageId}",
+  async (event) => {
+    const messageData = event.data?.data();
+
+    if (!messageData) {
+      console.log("[detectSchedulingIntent] No message data found");
+      return;
+    }
+
+    // Check if this message should be classified
+    if (!shouldClassifySchedulingIntent(messageData)) {
+      console.log("[detectSchedulingIntent] Skipping classification - message doesn't meet criteria");
+      return;
+    }
+
+    const messageText = messageData.text as string;
+    const conversationId = event.params.conversationId;
+    const messageId = event.params.messageId;
+
+    console.log(`[detectSchedulingIntent] Analyzing message ${messageId} in conversation ${conversationId}`);
+
+    try {
+      // Classify the message for scheduling intent
+      const classification = await classifySchedulingIntent(messageText);
+
+      console.log(`[detectSchedulingIntent] Classification result:`, {
+        hasIntent: classification.hasSchedulingIntent,
+        confidence: classification.confidence,
+        reasoning: classification.reasoning.substring(0, 100),
+      });
+
+      // Only write if there's meaningful intent (confidence >= 0.4)
+      if (classification.confidence >= 0.4) {
+        await event.data?.ref.set(
+          {
+            schedulingIntent: classification.hasSchedulingIntent,
+            schedulingIntentConfidence: classification.confidence,
+            schedulingIntentReasoning: classification.reasoning,
+            schedulingIntentKeywords: classification.suggestedKeywords || [],
+            schedulingIntentAnalyzedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        console.log(`[detectSchedulingIntent] Updated message ${messageId} with scheduling intent data`);
+      } else {
+        // Still mark as analyzed to prevent re-processing
+        await event.data?.ref.set(
+          {
+            schedulingIntent: false,
+            schedulingIntentConfidence: classification.confidence,
+            schedulingIntentAnalyzedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        console.log(`[detectSchedulingIntent] Low confidence (${classification.confidence}), marked as no intent`);
+      }
+    } catch (error) {
+      console.error(`[detectSchedulingIntent] Error classifying message ${messageId}:`, error);
+      // Don't throw - we don't want to block message creation if classification fails
+    }
+  }
+);
+
+// ============================================================================
+// AI Feature: Meeting Time Suggestions
+// ============================================================================
+
+interface SuggestMeetingTimesRequest {
+  conversationId: string;
+  participantIds: string[];
+  durationMinutes: number;
+  preferredDays?: number; // How many days out to suggest (default: 14)
+}
+
+interface MeetingSuggestion {
+  startTime: string; // ISO 8601 timestamp
+  endTime: string; // ISO 8601 timestamp
+  score: number; // 0-1 relevance score
+  justification: string; // Why this time works
+  dayOfWeek: string;
+  timeOfDay: string; // e.g., "morning", "afternoon", "evening"
+}
+
+// Zod schema for meeting suggestion response
+const meetingSuggestionSchema = z.object({
+  startTime: z.string().describe("ISO 8601 timestamp for meeting start"),
+  endTime: z.string().describe("ISO 8601 timestamp for meeting end"),
+  score: z.number().min(0).max(1).describe("Relevance score 0-1"),
+  justification: z.string().describe("Explanation of why this time slot works well"),
+  dayOfWeek: z.string().describe("Day of the week (e.g., Monday, Tuesday)"),
+  timeOfDay: z.enum(["morning", "afternoon", "evening"]).describe("General time of day"),
+});
+
+const meetingSuggestionsResponseSchema = z.object({
+  suggestions: z.array(meetingSuggestionSchema)
+    .min(3)
+    .max(5)
+    .describe("3-5 ranked meeting time suggestions"),
+});
+
+/**
+ * Helper: Analyze participant message activity patterns
+ */
+async function analyzeParticipantActivity(
+  participantIds: string[]
+): Promise<{
+  hourlyActivity: Record<number, number>; // hour (0-23) -> message count
+  dayOfWeekActivity: Record<string, number>; // day name -> message count
+  activeTimezoneOffset: number; // guessed timezone offset in minutes
+}> {
+  const hourlyActivity: Record<number, number> = {};
+  const dayOfWeekActivity: Record<string, number> = {};
+
+  // Initialize counters
+  for (let hour = 0; hour < 24; hour++) {
+    hourlyActivity[hour] = 0;
+  }
+  const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  daysOfWeek.forEach(day => {
+    dayOfWeekActivity[day] = 0;
+  });
+
+  // Collect messages from all participants
+  const messagePromises = participantIds.map(async (participantId) => {
+    // Skip bot participants
+    if (participantId.startsWith("bot:")) {
+      return [];
+    }
+
+    // Query conversations where this participant is involved
+    const conversationsSnapshot = await firestore
+      .collection(COLLECTION_CONVERSATIONS)
+      .where("participantIds", "array-contains", participantId)
+      .limit(10) // Limit conversations to avoid excessive queries
+      .get();
+
+    const participantMessages: Date[] = [];
+
+    // Collect messages from each conversation
+    for (const convDoc of conversationsSnapshot.docs) {
+      const messagesSnapshot = await firestore
+        .collection(COLLECTION_CONVERSATIONS)
+        .doc(convDoc.id)
+        .collection(SUBCOLLECTION_MESSAGES)
+        .where("senderId", "==", participantId)
+        .orderBy("timestamp", "desc")
+        .limit(50) // Sample recent messages
+        .get();
+
+      messagesSnapshot.docs.forEach((msgDoc) => {
+        const data = msgDoc.data();
+        const timestamp = (data.timestamp as admin.firestore.Timestamp)?.toDate();
+        if (timestamp) {
+          participantMessages.push(timestamp);
+        }
+      });
+    }
+
+    return participantMessages;
+  });
+
+  const allParticipantMessages = await Promise.all(messagePromises);
+  const allTimestamps = allParticipantMessages.flat();
+
+  // Analyze message timestamps
+  allTimestamps.forEach((timestamp) => {
+    const hour = timestamp.getHours();
+    const dayOfWeek = daysOfWeek[timestamp.getDay()];
+
+    hourlyActivity[hour] = (hourlyActivity[hour] || 0) + 1;
+    dayOfWeekActivity[dayOfWeek] = (dayOfWeekActivity[dayOfWeek] || 0) + 1;
+  });
+
+  // Estimate timezone offset based on activity patterns
+  // Find peak activity hour
+  let peakHour = 12; // default to noon
+  let maxActivity = 0;
+  Object.entries(hourlyActivity).forEach(([hour, count]) => {
+    if (count > maxActivity) {
+      maxActivity = count;
+      peakHour = parseInt(hour);
+    }
+  });
+
+  // Assume peak activity is around 2pm local time (14:00)
+  const estimatedLocalHour = 14;
+  const timezoneOffset = (peakHour - estimatedLocalHour) * 60; // in minutes
+
+  return {
+    hourlyActivity,
+    dayOfWeekActivity,
+    activeTimezoneOffset: timezoneOffset,
+  };
+}
+
+/**
+ * Callable function to suggest meeting times based on participant availability
+ */
+export const suggestMeetingTimes = onCall<SuggestMeetingTimesRequest>(async (request) => {
+  const uid = requireAuth(request);
+  const { conversationId, participantIds, durationMinutes, preferredDays = 14 } = request.data;
+
+  if (!conversationId) {
+    throw new HttpsError("invalid-argument", "conversationId is required");
+  }
+
+  if (!participantIds || participantIds.length === 0) {
+    throw new HttpsError("invalid-argument", "participantIds array is required");
+  }
+
+  if (!durationMinutes || durationMinutes <= 0) {
+    throw new HttpsError("invalid-argument", "durationMinutes must be a positive number");
+  }
+
+  console.log(`[suggestMeetingTimes] Suggesting times for ${participantIds.length} participants, ${durationMinutes}min duration`);
+
+  try {
+    // Verify conversation exists and user has access
+    const conversationDoc = await firestore
+      .collection(COLLECTION_CONVERSATIONS)
+      .doc(conversationId)
+      .get();
+
+    if (!conversationDoc.exists) {
+      throw new HttpsError("not-found", "Conversation not found");
+    }
+
+    const conversationData = conversationDoc.data();
+    const conversationParticipants = conversationData?.participantIds as string[] || [];
+
+    if (!conversationParticipants.includes(uid)) {
+      throw new HttpsError("permission-denied", "User is not a participant in this conversation");
+    }
+
+    // Analyze participant activity patterns
+    const activityAnalysis = await analyzeParticipantActivity(participantIds);
+
+    // Fetch participant names for context
+    const participantNames = await fetchSenderNames(participantIds);
+
+    // Build context for OpenAI
+    const participantContext = participantIds
+      .map(id => `- ${participantNames[id] || id}`)
+      .join("\n");
+
+    // Find top active hours
+    const topHours = Object.entries(activityAnalysis.hourlyActivity)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 5)
+      .map(([hour]) => parseInt(hour));
+
+    // Find top active days
+    const topDays = Object.entries(activityAnalysis.dayOfWeekActivity)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 3)
+      .map(([day]) => day);
+
+    const now = new Date();
+    const endDate = new Date(now);
+    endDate.setDate(endDate.getDate() + preferredDays);
+
+    const systemPrompt = `You are a meeting scheduling assistant that suggests optimal meeting times based on participant activity patterns.
+
+Your task is to suggest 3-5 meeting time slots that maximize the likelihood of participant availability.
+
+Consider:
+1. Historical activity patterns (when participants are typically active)
+2. Standard business hours and timezone considerations
+3. Avoiding early mornings, late evenings, and weekends unless activity suggests otherwise
+4. Meeting duration requirements
+5. Providing a mix of options (different days/times)
+
+For each suggestion:
+- Provide exact start and end times as ISO 8601 timestamps
+- Score the suggestion (0-1) based on how well it matches activity patterns
+- Justify why this time works well
+- Identify the day of week and general time of day
+
+Current date: ${now.toISOString()}
+Suggestion window: Next ${preferredDays} days (until ${endDate.toISOString()})`;
+
+    const userPrompt = `Suggest ${durationMinutes}-minute meeting times for these participants:
+
+${participantContext}
+
+Activity Analysis:
+- Most active hours (UTC): ${topHours.join(", ")}
+- Most active days: ${topDays.join(", ")}
+- Estimated timezone offset: ${activityAnalysis.activeTimezoneOffset} minutes from UTC
+
+Generate 3-5 ranked meeting time suggestions within the next ${preferredDays} days.`;
+
+    console.log(`[suggestMeetingTimes] Calling OpenAI with activity patterns: top hours [${topHours}], top days [${topDays}]`);
+
+    // Call OpenAI for meeting suggestions
+    const { object: response } = await generateObject({
+      model: openai("gpt-4o-mini"),
+      system: systemPrompt,
+      prompt: userPrompt,
+      schema: meetingSuggestionsResponseSchema,
+      temperature: 0.7, // Allow some creativity in suggestions
+    });
+
+    console.log(`[suggestMeetingTimes] Generated ${response.suggestions.length} meeting suggestions`);
+
+    // Format response
+    const suggestions: MeetingSuggestion[] = response.suggestions.map((s, index) => ({
+      startTime: s.startTime,
+      endTime: s.endTime,
+      score: s.score,
+      justification: s.justification,
+      dayOfWeek: s.dayOfWeek,
+      timeOfDay: s.timeOfDay,
+    }));
+
+    // Sort by score descending
+    suggestions.sort((a, b) => b.score - a.score);
+
+    // Track analytics for suggestion generation
+    try {
+      const analyticsRef = firestore.collection("analytics").doc("meetingSuggestions");
+      await analyticsRef.set({
+        totalRequests: admin.firestore.FieldValue.increment(1),
+        totalSuggestionsGenerated: admin.firestore.FieldValue.increment(suggestions.length),
+        lastRequestAt: admin.firestore.FieldValue.serverTimestamp(),
+        averageParticipantCount: admin.firestore.FieldValue.increment(participantIds.length),
+        averageDurationMinutes: admin.firestore.FieldValue.increment(durationMinutes),
+      }, { merge: true });
+
+      // Also track individual request details
+      await analyticsRef.collection("requests").add({
+        conversationId,
+        participantCount: participantIds.length,
+        durationMinutes,
+        suggestionsCount: suggestions.length,
+        topSuggestionScore: suggestions[0]?.score || 0,
+        requestedBy: uid,
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      console.log(`[suggestMeetingTimes] Analytics recorded for request`);
+    } catch (analyticsError) {
+      // Don't fail the request if analytics fails
+      console.error("[suggestMeetingTimes] Analytics error (non-fatal):", analyticsError);
+    }
+
+    return {
+      suggestions,
+      conversation_id: conversationId,
+      duration_minutes: durationMinutes,
+      participant_count: participantIds.length,
+      generated_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // 24 hours
+    };
+  } catch (error) {
+    console.error("[suggestMeetingTimes] Error:", error);
+    if (error instanceof HttpsError) {
+      throw error;
+    }
+    throw new HttpsError("internal", "Failed to suggest meeting times", error);
+  }
+});
+
 // Push Notification Trigger
 // Sends FCM push notifications when a new message is created
 // Temporarily commented out - uncomment after Eventarc permissions propagate

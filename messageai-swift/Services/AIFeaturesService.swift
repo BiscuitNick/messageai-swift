@@ -42,6 +42,12 @@ final class AIFeaturesService {
     /// Global search error message
     var searchError: String?
 
+    /// Per-conversation meeting suggestions loading state
+    var meetingSuggestionsLoadingStates: [String: Bool] = [:]
+
+    /// Per-conversation meeting suggestions error messages
+    var meetingSuggestionsErrors: [String: String] = [:]
+
     // MARK: - Private Dependencies
 
     @ObservationIgnored
@@ -98,6 +104,17 @@ final class AIFeaturesService {
         }
     }
 
+    /// Cached meeting suggestions entry with expiration
+    private struct CachedMeetingSuggestions {
+        let response: MeetingSuggestionsResponse
+        let cachedAt: Date
+
+        var isExpired: Bool {
+            // Use expiry from response
+            Date() > response.expiresAt
+        }
+    }
+
     @ObservationIgnored
     private var summaryCache: [String: CachedSummary] = [:]
 
@@ -106,6 +123,9 @@ final class AIFeaturesService {
 
     @ObservationIgnored
     private var actionItemsCache: [String: CachedActionItems] = [:]
+
+    @ObservationIgnored
+    private var meetingSuggestionsCache: [String: CachedMeetingSuggestions] = [:]
 
     // MARK: - Initialization
 
@@ -212,6 +232,7 @@ final class AIFeaturesService {
         summaryCache.removeAll()
         searchCache.removeAll()
         actionItemsCache.removeAll()
+        meetingSuggestionsCache.removeAll()
     }
 
     /// Reset service state (called on sign-out)
@@ -770,6 +791,278 @@ final class AIFeaturesService {
         } catch {
             searchError = error.localizedDescription
             throw error
+        }
+    }
+
+    // MARK: - Meeting Suggestions API
+
+    /// Fetch meeting time suggestions for a conversation
+    /// - Parameters:
+    ///   - conversationId: The conversation to suggest meeting times for
+    ///   - participantIds: Array of participant IDs to consider for availability
+    ///   - durationMinutes: Duration of the meeting in minutes
+    ///   - preferredDays: Number of days to look ahead for suggestions (default: 14)
+    ///   - forceRefresh: Force a new suggestion even if cache is valid (default: false)
+    /// - Returns: MeetingSuggestionsResponse with the generated suggestions
+    /// - Throws: AIFeaturesError or network errors
+    func suggestMeetingTimes(
+        conversationId: String,
+        participantIds: [String],
+        durationMinutes: Int,
+        preferredDays: Int = 14,
+        forceRefresh: Bool = false
+    ) async throws -> MeetingSuggestionsResponse {
+        // Verify user is authenticated
+        guard authService?.currentUser != nil else {
+            meetingSuggestionsErrors[conversationId] = AIFeaturesError.unauthorized.errorDescription
+            throw AIFeaturesError.unauthorized
+        }
+
+        // Set loading state
+        meetingSuggestionsLoadingStates[conversationId] = true
+        meetingSuggestionsErrors[conversationId] = nil
+
+        defer {
+            meetingSuggestionsLoadingStates[conversationId] = false
+        }
+
+        // Check cache first unless force refresh is requested
+        if !forceRefresh,
+           let cached = meetingSuggestionsCache[conversationId],
+           !cached.isExpired {
+            #if DEBUG
+            print("[AIFeaturesService] Returning cached meeting suggestions for conversation \(conversationId)")
+            #endif
+            return cached.response
+        }
+
+        // Try to load from local SwiftData storage if not in memory cache
+        if !forceRefresh, let localSuggestions = fetchMeetingSuggestions(for: conversationId) {
+            if localSuggestions.isValid {
+                #if DEBUG
+                print("[AIFeaturesService] Returning local meeting suggestions for conversation \(conversationId)")
+                #endif
+                let response = MeetingSuggestionsResponse(
+                    suggestions: localSuggestions.suggestions.map { data in
+                        MeetingTimeSuggestion(
+                            startTime: data.startTime,
+                            endTime: data.endTime,
+                            score: data.score,
+                            justification: data.justification,
+                            dayOfWeek: data.dayOfWeek,
+                            timeOfDay: TimeOfDay(rawValue: data.timeOfDay) ?? .afternoon
+                        )
+                    },
+                    conversationId: localSuggestions.conversationId,
+                    durationMinutes: localSuggestions.durationMinutes,
+                    participantCount: localSuggestions.participantCount,
+                    generatedAt: localSuggestions.generatedAt,
+                    expiresAt: localSuggestions.expiresAt
+                )
+                // Update memory cache
+                meetingSuggestionsCache[conversationId] = CachedMeetingSuggestions(
+                    response: response,
+                    cachedAt: Date()
+                )
+                return response
+            } else {
+                // Delete expired suggestions
+                try? deleteMeetingSuggestions(for: conversationId)
+            }
+        }
+
+        do {
+            // Prepare the request payload
+            let payload: [String: Any] = [
+                "conversationId": conversationId,
+                "participantIds": participantIds,
+                "durationMinutes": durationMinutes,
+                "preferredDays": preferredDays,
+            ]
+
+            // Call the Firebase Cloud Function
+            let response: MeetingSuggestionsResponse = try await call("suggestMeetingTimes", payload: payload)
+
+            // Update memory cache
+            meetingSuggestionsCache[conversationId] = CachedMeetingSuggestions(
+                response: response,
+                cachedAt: Date()
+            )
+
+            // Save to local storage
+            do {
+                try saveMeetingSuggestions(response: response)
+            } catch {
+                // Log error but don't fail the entire operation
+                #if DEBUG
+                print("[AIFeaturesService] Failed to save meeting suggestions locally: \(error)")
+                #endif
+            }
+
+            return response
+        } catch {
+            meetingSuggestionsErrors[conversationId] = error.localizedDescription
+            throw error
+        }
+    }
+
+    /// Save meeting suggestions to local SwiftData storage
+    /// - Parameter response: The meeting suggestions response to save
+    /// - Throws: SwiftData persistence errors
+    private func saveMeetingSuggestions(response: MeetingSuggestionsResponse) throws {
+        guard let modelContext = modelContext else {
+            throw AIFeaturesError.notConfigured
+        }
+
+        // Check if suggestions already exist for this conversation
+        let descriptor = FetchDescriptor<MeetingSuggestionEntity>(
+            predicate: #Predicate { $0.conversationId == response.conversationId }
+        )
+
+        // Convert suggestions to data format
+        let suggestionsData = response.suggestions.map { suggestion in
+            MeetingTimeSuggestionData(
+                startTime: suggestion.startTime,
+                endTime: suggestion.endTime,
+                score: suggestion.score,
+                justification: suggestion.justification,
+                dayOfWeek: suggestion.dayOfWeek,
+                timeOfDay: suggestion.timeOfDay.rawValue
+            )
+        }
+
+        if let existing = try modelContext.fetch(descriptor).first {
+            // Update existing suggestions
+            existing.suggestions = suggestionsData
+            existing.durationMinutes = response.durationMinutes
+            existing.participantCount = response.participantCount
+            existing.generatedAt = response.generatedAt
+            existing.expiresAt = response.expiresAt
+            existing.updatedAt = Date()
+        } else {
+            // Create new suggestions entity
+            let entity = MeetingSuggestionEntity(
+                conversationId: response.conversationId,
+                suggestions: suggestionsData,
+                durationMinutes: response.durationMinutes,
+                participantCount: response.participantCount,
+                generatedAt: response.generatedAt,
+                expiresAt: response.expiresAt
+            )
+            modelContext.insert(entity)
+        }
+
+        try modelContext.save()
+    }
+
+    /// Fetch meeting suggestions for a conversation from local SwiftData storage
+    /// - Parameter conversationId: The conversation to fetch suggestions for
+    /// - Returns: MeetingSuggestionEntity if one exists and is valid, nil otherwise
+    func fetchMeetingSuggestions(for conversationId: String) -> MeetingSuggestionEntity? {
+        guard let modelContext = modelContext else { return nil }
+
+        let descriptor = FetchDescriptor<MeetingSuggestionEntity>(
+            predicate: #Predicate { $0.conversationId == conversationId },
+            sortBy: [SortDescriptor(\.generatedAt, order: .reverse)]
+        )
+
+        return try? modelContext.fetch(descriptor).first
+    }
+
+    /// Delete meeting suggestions for a conversation from local storage
+    /// - Parameter conversationId: The conversation whose suggestions should be deleted
+    /// - Throws: SwiftData persistence errors
+    func deleteMeetingSuggestions(for conversationId: String) throws {
+        guard let modelContext = modelContext else {
+            throw AIFeaturesError.notConfigured
+        }
+
+        let descriptor = FetchDescriptor<MeetingSuggestionEntity>(
+            predicate: #Predicate { $0.conversationId == conversationId }
+        )
+
+        if let existing = try modelContext.fetch(descriptor).first {
+            modelContext.delete(existing)
+            try modelContext.save()
+        }
+    }
+
+    /// Clear all expired meeting suggestions from local storage
+    /// - Throws: SwiftData persistence errors
+    func clearExpiredMeetingSuggestions() throws {
+        guard let modelContext = modelContext else {
+            throw AIFeaturesError.notConfigured
+        }
+
+        let descriptor = FetchDescriptor<MeetingSuggestionEntity>()
+        let allSuggestions = try modelContext.fetch(descriptor)
+
+        var deletedCount = 0
+        for suggestion in allSuggestions where suggestion.isExpired {
+            modelContext.delete(suggestion)
+            deletedCount += 1
+        }
+
+        if deletedCount > 0 {
+            try modelContext.save()
+            #if DEBUG
+            print("[AIFeaturesService] Cleared \(deletedCount) expired meeting suggestions")
+            #endif
+        }
+    }
+
+    /// Track meeting suggestion interaction analytics
+    /// - Parameters:
+    ///   - conversationId: The conversation ID
+    ///   - action: The action taken (e.g., "copy", "share", "dismiss", "accept")
+    ///   - suggestionIndex: The index of the suggestion interacted with (0-based)
+    ///   - suggestionScore: The score of the suggestion
+    func trackMeetingSuggestionInteraction(
+        conversationId: String,
+        action: String,
+        suggestionIndex: Int,
+        suggestionScore: Double
+    ) async {
+        guard let firestoreService = firestoreService else {
+            #if DEBUG
+            print("[AIFeaturesService] Cannot track analytics - FirestoreService not configured")
+            #endif
+            return
+        }
+
+        do {
+            // Track interaction in analytics/meetingSuggestions/interactions subcollection
+            let analyticsRef = firestoreService.db
+                .collection("analytics")
+                .document("meetingSuggestions")
+                .collection("interactions")
+
+            try await analyticsRef.addDocument(data: [
+                "conversationId": conversationId,
+                "action": action,
+                "suggestionIndex": suggestionIndex,
+                "suggestionScore": suggestionScore,
+                "timestamp": Timestamp(date: Date())
+            ])
+
+            // Also increment counter for this action type
+            let summaryRef = firestoreService.db
+                .collection("analytics")
+                .document("meetingSuggestions")
+
+            try await summaryRef.updateData([
+                "interactions.\(action)": FieldValue.increment(Int64(1)),
+                "lastInteractionAt": FieldValue.serverTimestamp()
+            ])
+
+            #if DEBUG
+            print("[AIFeaturesService] Tracked meeting suggestion interaction: \(action) for conversation \(conversationId)")
+            #endif
+        } catch {
+            #if DEBUG
+            print("[AIFeaturesService] Failed to track analytics (non-fatal): \(error.localizedDescription)")
+            #endif
+            // Analytics failures should not block the user experience
         }
     }
 
