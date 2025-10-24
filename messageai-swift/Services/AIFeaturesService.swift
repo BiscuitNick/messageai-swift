@@ -159,6 +159,68 @@ final class AIFeaturesService {
     /// Debounce interval in seconds (default: 5 minutes)
     private let debounceInterval: TimeInterval = 300
 
+    // MARK: - Telemetry
+
+    /// Telemetry event capturing AI call metrics
+    private struct TelemetryEvent: Codable {
+        let eventId: String
+        let userId: String?
+        let functionName: String
+        let startTime: Date
+        let endTime: Date
+        let durationMs: Int
+        let success: Bool
+        let attemptCount: Int
+        let errorType: String?
+        let errorMessage: String?
+        let cacheHit: Bool
+        let timestamp: Date
+
+        init(
+            userId: String?,
+            functionName: String,
+            startTime: Date,
+            endTime: Date,
+            success: Bool,
+            attemptCount: Int,
+            errorType: String? = nil,
+            errorMessage: String? = nil,
+            cacheHit: Bool = false
+        ) {
+            self.eventId = UUID().uuidString
+            self.userId = userId
+            self.functionName = functionName
+            self.startTime = startTime
+            self.endTime = endTime
+            self.durationMs = Int((endTime.timeIntervalSince(startTime)) * 1000)
+            self.success = success
+            self.attemptCount = attemptCount
+            self.errorType = errorType
+            self.errorMessage = errorMessage
+            self.cacheHit = cacheHit
+            self.timestamp = Date()
+        }
+
+        func toDictionary() -> [String: Any] {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            guard let data = try? encoder.encode(self),
+                  let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return [:]
+            }
+            return dict
+        }
+    }
+
+    /// Enable/disable telemetry logging (can be controlled by user settings or build config)
+    private var telemetryEnabled: Bool {
+        #if DEBUG
+        return true
+        #else
+        return UserDefaults.standard.bool(forKey: "ai_telemetry_enabled")
+        #endif
+    }
+
     // MARK: - Initialization
 
     init() {
@@ -188,20 +250,87 @@ final class AIFeaturesService {
         self.networkMonitor = networkMonitor
     }
 
+    // MARK: - Telemetry Logging
+
+    /// Log telemetry event to Firestore analytics collection
+    /// - Parameter event: The telemetry event to log
+    private func logTelemetry(_ event: TelemetryEvent) {
+        guard telemetryEnabled else { return }
+
+        Task { [weak self] in
+            guard let self = self,
+                  let firestoreService = await self.firestoreService else {
+                return
+            }
+
+            do {
+                // Access firestore on MainActor
+                let db = await MainActor.run { firestoreService.firestore }
+                let collectionRef = db.collection("ai_telemetry")
+
+                try await collectionRef.document(event.eventId).setData(event.toDictionary())
+
+                #if DEBUG
+                await MainActor.run {
+                    print("[AIFeaturesService] Logged telemetry: \(event.functionName) - \(event.success ? "success" : "failure") in \(event.durationMs)ms (attempts: \(event.attemptCount))")
+                }
+                #endif
+            } catch {
+                #if DEBUG
+                await MainActor.run {
+                    print("[AIFeaturesService] Failed to log telemetry: \(error.localizedDescription)")
+                }
+                #endif
+            }
+        }
+    }
+
+    // MARK: - Retry Configuration
+
+    /// Retry configuration constants
+    private enum RetryConfig {
+        static let maxAttempts = 3
+        static let baseDelayNanoseconds: UInt64 = 500_000_000 // 0.5 seconds
+        static let maxDelayNanoseconds: UInt64 = 8_000_000_000 // 8 seconds
+    }
+
     // MARK: - Generic Callable Helper
 
-    /// Generic helper to call Firebase Cloud Functions and decode response
+    /// Generic helper to call Firebase Cloud Functions and decode response with retry logic
     /// - Parameters:
     ///   - name: Function name to invoke
     ///   - payload: Request payload as dictionary
     /// - Returns: Decoded response of type T
     /// - Throws: Function call or decoding errors
     func call<T: Decodable>(_ name: String, payload: [String: Any] = [:]) async throws -> T {
+        try await callWithRetry(name: name, payload: payload)
+    }
+
+    /// Call Firebase Cloud Function with exponential backoff retry
+    /// - Parameters:
+    ///   - name: Function name to invoke
+    ///   - payload: Request payload as dictionary
+    ///   - attempt: Current attempt number (internal use)
+    ///   - startTime: Start time for telemetry tracking (internal use)
+    /// - Returns: Decoded response of type T
+    /// - Throws: Function call or decoding errors after all retries exhausted
+    private func callWithRetry<T: Decodable>(
+        name: String,
+        payload: [String: Any] = [:],
+        attempt: Int = 1,
+        startTime: Date? = nil
+    ) async throws -> T {
         isProcessing = true
         errorMessage = nil
 
+        // Track start time on first attempt
+        let callStartTime = startTime ?? Date()
+        let userId = authService?.currentUser?.id
+
         defer {
-            isProcessing = false
+            if attempt >= RetryConfig.maxAttempts {
+                isProcessing = false
+            }
         }
 
         do {
@@ -229,19 +358,134 @@ final class AIFeaturesService {
             decoder.dateDecodingStrategy = .iso8601
             let decoded = try decoder.decode(T.self, from: jsonData)
 
+            #if DEBUG
+            if attempt > 1 {
+                print("[AIFeaturesService] '\(name)' succeeded on attempt \(attempt)")
+            }
+            #endif
+
+            // Log successful telemetry
+            let telemetryEvent = TelemetryEvent(
+                userId: userId,
+                functionName: name,
+                startTime: callStartTime,
+                endTime: Date(),
+                success: true,
+                attemptCount: attempt
+            )
+            logTelemetry(telemetryEvent)
+
             return decoded
         } catch {
             let detailedError: String
+            let shouldRetry = isRetryableError(error)
+
             if let decodingError = error as? DecodingError {
                 detailedError = formatDecodingError(decodingError)
                 print("[AIFeaturesService] Decoding error for '\(name)': \(detailedError)")
             } else {
                 detailedError = error.localizedDescription
-                print("[AIFeaturesService] Error calling '\(name)': \(detailedError)")
+                print("[AIFeaturesService] Error calling '\(name)' (attempt \(attempt)/\(RetryConfig.maxAttempts)): \(detailedError)")
             }
+
+            // Check if we should retry
+            if shouldRetry && attempt < RetryConfig.maxAttempts {
+                // Calculate exponential backoff delay
+                let delayNanoseconds = calculateBackoffDelay(for: attempt)
+
+                #if DEBUG
+                print("[AIFeaturesService] Retrying '\(name)' after \(Double(delayNanoseconds) / 1_000_000_000)s delay...")
+                #endif
+
+                // Wait before retry
+                try await Task.sleep(nanoseconds: delayNanoseconds)
+
+                // Recursive retry (pass through startTime for accurate telemetry)
+                return try await callWithRetry(name: name, payload: payload, attempt: attempt + 1, startTime: callStartTime)
+            }
+
+            // No more retries - log failure telemetry
+            let errorType = String(describing: type(of: error))
+            let telemetryEvent = TelemetryEvent(
+                userId: userId,
+                functionName: name,
+                startTime: callStartTime,
+                endTime: Date(),
+                success: false,
+                attemptCount: attempt,
+                errorType: errorType,
+                errorMessage: detailedError
+            )
+            logTelemetry(telemetryEvent)
+
+            // Surface error
             errorMessage = detailedError
             throw error
         }
+    }
+
+    /// Determine if an error is retryable (network/transient errors)
+    /// - Parameter error: The error to check
+    /// - Returns: True if the error is retryable
+    private func isRetryableError(_ error: Error) -> Bool {
+        // Don't retry decoding errors - these indicate response schema issues
+        if error is DecodingError {
+            return false
+        }
+
+        // Don't retry invalid response errors - these indicate backend issues
+        if let aiError = error as? AIFeaturesError, aiError == .invalidResponse {
+            return false
+        }
+
+        // Check for NSError with network-related codes
+        let nsError = error as NSError
+
+        // Retry on network errors
+        if nsError.domain == NSURLErrorDomain {
+            switch nsError.code {
+            case NSURLErrorTimedOut,
+                 NSURLErrorCannotConnectToHost,
+                 NSURLErrorNetworkConnectionLost,
+                 NSURLErrorNotConnectedToInternet,
+                 NSURLErrorDNSLookupFailed:
+                return true
+            default:
+                return false
+            }
+        }
+
+        // Retry on Functions-specific errors (INTERNAL, UNAVAILABLE, DEADLINE_EXCEEDED)
+        if nsError.domain == "FIRFunctionsErrorDomain" {
+            // FunctionsErrorCode: internal = 13, unavailable = 14, deadlineExceeded = 4
+            switch nsError.code {
+            case 4, 13, 14:
+                return true
+            default:
+                return false
+            }
+        }
+
+        // Don't retry by default
+        return false
+    }
+
+    /// Calculate exponential backoff delay with jitter
+    /// - Parameter attempt: Current attempt number
+    /// - Returns: Delay in nanoseconds
+    private func calculateBackoffDelay(for attempt: Int) -> UInt64 {
+        // Exponential backoff: base * 2^(attempt-1)
+        let exponentialDelay = RetryConfig.baseDelayNanoseconds * UInt64(pow(2.0, Double(attempt - 1)))
+
+        // Cap at max delay
+        let cappedDelay = min(exponentialDelay, RetryConfig.maxDelayNanoseconds)
+
+        // Add jitter (±25% randomness) to avoid thundering herd
+        let jitterRange = Double(cappedDelay) * 0.25
+        let jitter = Double.random(in: -jitterRange...jitterRange)
+        let finalDelay = UInt64(max(0, Double(cappedDelay) + jitter))
+
+        return finalDelay
     }
 
     /// Format a DecodingError into a human-readable message
@@ -286,6 +530,22 @@ final class AIFeaturesService {
         // Clear all cached data from SwiftData
         clearSearchDataFromSwiftData()
         clearCoordinationDataFromSwiftData()
+    }
+
+    /// Clear expired cached data from SwiftData (call periodically or on app lifecycle events)
+    /// This is a non-destructive cleanup that only removes stale data
+    func clearExpiredCachedData() {
+        do {
+            try clearExpiredThreadSummaries()
+            try clearExpiredSearchResults()
+            #if DEBUG
+            print("[AIFeaturesService] Periodic cleanup of expired cached data completed")
+            #endif
+        } catch {
+            #if DEBUG
+            print("[AIFeaturesService] Error during periodic cleanup: \(error.localizedDescription)")
+            #endif
+        }
     }
 
     /// Clear search-related data from SwiftData (search results and recent queries)
@@ -585,14 +845,15 @@ final class AIFeaturesService {
         )
 
         if let existing = try modelContext.fetch(descriptor).first {
-            // Update existing summary
+            // Update existing summary and reset TTL
             existing.summary = summary
             existing.keyPoints = keyPoints
             existing.generatedAt = generatedAt
             existing.messageCount = messageCount
             existing.updatedAt = Date()
+            existing.expiresAt = Date().addingTimeInterval(24 * 60 * 60) // Reset 24h TTL
         } else {
-            // Create new summary
+            // Create new summary (TTL set by default in init)
             let entity = ThreadSummaryEntity(
                 conversationId: conversationId,
                 summary: summary,
@@ -606,9 +867,9 @@ final class AIFeaturesService {
         try modelContext.save()
     }
 
-    /// Fetch the most recent thread summary for a conversation
+    /// Fetch the most recent thread summary for a conversation (non-expired only)
     /// - Parameter conversationId: The conversation to fetch summary for
-    /// - Returns: ThreadSummaryEntity if one exists, nil otherwise
+    /// - Returns: ThreadSummaryEntity if one exists and is not expired, nil otherwise
     func fetchThreadSummary(for conversationId: String) -> ThreadSummaryEntity? {
         guard let modelContext = modelContext else { return nil }
 
@@ -617,7 +878,43 @@ final class AIFeaturesService {
             sortBy: [SortDescriptor(\.generatedAt, order: .reverse)]
         )
 
-        return try? modelContext.fetch(descriptor).first
+        guard let summary = try? modelContext.fetch(descriptor).first else {
+            return nil
+        }
+
+        // Check if expired
+        if summary.isExpired {
+            #if DEBUG
+            print("[AIFeaturesService] Summary for \(conversationId) expired, returning nil")
+            #endif
+            return nil
+        }
+
+        return summary
+    }
+
+    /// Clear expired thread summaries from local storage
+    /// - Throws: SwiftData persistence errors
+    func clearExpiredThreadSummaries() throws {
+        guard let modelContext = modelContext else {
+            throw AIFeaturesError.notConfigured
+        }
+
+        let descriptor = FetchDescriptor<ThreadSummaryEntity>()
+        let allSummaries = try modelContext.fetch(descriptor)
+
+        var deletedCount = 0
+        for summary in allSummaries where summary.isExpired {
+            modelContext.delete(summary)
+            deletedCount += 1
+        }
+
+        if deletedCount > 0 {
+            try modelContext.save()
+            #if DEBUG
+            print("[AIFeaturesService] Cleared \(deletedCount) expired thread summaries")
+            #endif
+        }
     }
 
     /// Delete a thread summary from local storage
@@ -635,6 +932,60 @@ final class AIFeaturesService {
         if let existing = try modelContext.fetch(descriptor).first {
             modelContext.delete(existing)
             try modelContext.save()
+        }
+    }
+
+    // MARK: - Search Results Persistence
+
+    /// Fetch search results from local storage for a given query
+    /// - Parameter query: The search query
+    /// - Returns: Array of non-expired SearchResultEntity instances, or nil if none found or all expired
+    func fetchSearchResults(for query: String) -> [SearchResultEntity]? {
+        guard let modelContext = modelContext else { return nil }
+
+        let descriptor = FetchDescriptor<SearchResultEntity>(
+            predicate: #Predicate { $0.query == query },
+            sortBy: [SortDescriptor(\.rank)]
+        )
+
+        guard let results = try? modelContext.fetch(descriptor), !results.isEmpty else {
+            return nil
+        }
+
+        // Filter out expired results
+        let validResults = results.filter { !$0.isExpired }
+
+        if validResults.isEmpty {
+            #if DEBUG
+            print("[AIFeaturesService] All search results for '\(query)' expired, returning nil")
+            #endif
+            return nil
+        }
+
+        return validResults
+    }
+
+    /// Clear expired search results from local storage
+    /// - Throws: SwiftData persistence errors
+    func clearExpiredSearchResults() throws {
+        guard let modelContext = modelContext else {
+            throw AIFeaturesError.notConfigured
+        }
+
+        let descriptor = FetchDescriptor<SearchResultEntity>()
+        let allResults = try modelContext.fetch(descriptor)
+
+        var deletedCount = 0
+        for result in allResults where result.isExpired {
+            modelContext.delete(result)
+            deletedCount += 1
+        }
+
+        if deletedCount > 0 {
+            try modelContext.save()
+            #if DEBUG
+            print("[AIFeaturesService] Cleared \(deletedCount) expired search results")
+            #endif
         }
     }
 
@@ -940,14 +1291,28 @@ final class AIFeaturesService {
             searchLoadingState = false
         }
 
-        // Check cache first unless force refresh is requested
+        // Check in-memory cache first unless force refresh is requested
         if !forceRefresh,
            let cached = searchCache[trimmedQuery],
            !cached.isExpired {
             #if DEBUG
-            print("[AIFeaturesService] Returning cached search results for query: \(trimmedQuery)")
+            print("[AIFeaturesService] Returning in-memory cached search results for query: \(trimmedQuery)")
             #endif
             return cached.results
+        }
+
+        // Try to load from local SwiftData storage if not in memory cache
+        if !forceRefresh, let localResults = fetchSearchResults(for: trimmedQuery) {
+            #if DEBUG
+            print("[AIFeaturesService] Returning local search results for query: \(trimmedQuery) (\(localResults.count) results)")
+            #endif
+            // Update memory cache
+            searchCache[trimmedQuery] = CachedSearchResults(
+                query: trimmedQuery,
+                results: localResults,
+                cachedAt: Date()
+            )
+            return localResults
         }
 
         guard let modelContext = modelContext else {
@@ -990,6 +1355,16 @@ final class AIFeaturesService {
 
             // Call the Firebase Cloud Function
             let response: SmartSearchFirebaseResponse = try await call("smartSearch", payload: payload)
+
+            // Delete any existing search results for this query (including expired ones)
+            let existingDescriptor = FetchDescriptor<SearchResultEntity>(
+                predicate: #Predicate { $0.query == trimmedQuery }
+            )
+            if let existingResults = try? modelContext.fetch(existingDescriptor) {
+                for existing in existingResults {
+                    modelContext.delete(existing)
+                }
+            }
 
             // Transform to SearchResultEntity instances
             var searchResults: [SearchResultEntity] = []
@@ -1470,6 +1845,72 @@ final class AIFeaturesService {
                 self.errorMessage = error.localizedDescription
             }
         }
+    }
+
+    // MARK: - AI Feedback Submission
+
+    /// Feedback entry for AI-generated content
+    struct AIFeedback: Codable {
+        let feedbackId: String
+        let userId: String
+        let conversationId: String
+        let featureType: String  // "summary", "action_items", "search", "meeting_suggestions"
+        let originalContent: String
+        let userCorrection: String?
+        let rating: Int?  // 1-5 stars
+        let comment: String?
+        let timestamp: Date
+        let metadata: [String: String]?
+
+        init(
+            userId: String,
+            conversationId: String,
+            featureType: String,
+            originalContent: String,
+            userCorrection: String? = nil,
+            rating: Int? = nil,
+            comment: String? = nil,
+            metadata: [String: String]? = nil
+        ) {
+            self.feedbackId = UUID().uuidString
+            self.userId = userId
+            self.conversationId = conversationId
+            self.featureType = featureType
+            self.originalContent = originalContent
+            self.userCorrection = userCorrection
+            self.rating = rating
+            self.comment = comment
+            self.timestamp = Date()
+            self.metadata = metadata
+        }
+
+        func toDictionary() -> [String: Any] {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            guard let data = try? encoder.encode(self),
+                  let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return [:]
+            }
+            return dict
+        }
+    }
+
+    /// Submit user feedback for AI-generated content
+    /// - Parameter feedback: The feedback to submit
+    /// - Throws: Firestore errors
+    func submitAIFeedback(_ feedback: AIFeedback) async throws {
+        guard let firestoreService = firestoreService else {
+            throw AIFeaturesError.notConfigured
+        }
+
+        let db = firestoreService.firestore
+        let collectionRef = db.collection("ai_feedback")
+
+        try await collectionRef.document(feedback.feedbackId).setData(feedback.toDictionary())
+
+        #if DEBUG
+        print("[AIFeaturesService] Submitted AI feedback: \(feedback.featureType) for conversation \(feedback.conversationId)")
+        #endif
     }
 
     // MARK: - Coordination Insights Sync

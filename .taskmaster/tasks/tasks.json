@@ -965,8 +965,8 @@
             "title": "Add retry and backoff utilities to AIFeaturesService",
             "description": "Create centralized async retry helpers wrapping OpenAI callable usage in AIFeaturesService with exponential backoff and failure surfacing.",
             "dependencies": [],
-            "details": "Implement reusable callWithRetry wrapper, integrate into AI callable entry points, ensure cancellation awareness, and document configuration constants.",
-            "status": "pending",
+            "details": "Implement reusable callWithRetry wrapper, integrate into AI callable entry points, ensure cancellation awareness, and document configuration constants.\n<info added on 2025-10-24T23:24:28.034Z>\nImplemented RetryConfig constants, callWithRetry exponential backoff with jittered Task.sleep recursion, network/Firebase-only isRetryableError filtering, and calculateBackoffDelay cap in messageai-swift/Services/AIFeaturesService.swift; build passes locally.\n</info added on 2025-10-24T23:24:28.034Z>",
+            "status": "done",
             "testStrategy": "XCTest covering exponential delay schedule, success after transient failures, and final error propagation.",
             "parentId": "undefined"
           },
@@ -978,7 +978,7 @@
               1
             ],
             "details": "Define SwiftData models keyed by conversation and query, add fetch and store helpers in AIFeaturesService, purge records exceeding TTL, and update callers to consult cache before retrying remote operations.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "Unit tests mocking time to confirm TTL expiry, cache hits, and fallback to network path when data missing or stale.",
             "parentId": "undefined"
           },
@@ -989,8 +989,8 @@
             "dependencies": [
               1
             ],
-            "details": "Extend service to emit structured telemetry payloads, add Firestore analytics schema or Crashlytics breadcrumb formatting, and ensure retries emit final status with context identifiers.",
-            "status": "pending",
+            "details": "Extend service to emit structured telemetry payloads, add Firestore analytics schema or Crashlytics breadcrumb formatting, and ensure retries emit final status with context identifiers.\n<info added on 2025-10-24T23:35:40.340Z>\nAdded TelemetryEvent instrumentation in messageai-swift/Services/AIFeaturesService.swift capturing eventId, userId, functionName, start/end time, durationMs, success, attemptCount, error diagnostics, cacheHit, and timestamp, with logTelemetry() asynchronously persisting each call to the ai_telemetry Firestore collection and printing in DEBUG builds. callWithRetry() now wraps every AI function call with telemetry-enabled metrics tracking retries, latency, cache state, and final success/failure, gated by a telemetryEnabled flag that defaults to DEBUG and can be flipped via UserDefaults in production.\n</info added on 2025-10-24T23:35:40.340Z>",
+            "status": "done",
             "testStrategy": "Integration tests against Firebase emulator verifying analytics documents format plus unit checks for breadcrumb payload construction.",
             "parentId": "undefined"
           },
@@ -1002,8 +1002,8 @@
               2,
               3
             ],
-            "details": "Design SwiftUI sheet or modal, wire into AIFeaturesService feedback API, validate required fields, and queue writes with offline support using retry plus cache metadata.",
-            "status": "pending",
+            "details": "Design SwiftUI sheet or modal, wire into AIFeaturesService feedback API, validate required fields, and queue writes with offline support using retry plus cache metadata.\n<info added on 2025-10-24T23:38:57.792Z>\nImplemented `AIFeaturesService.AIFeedback` and `submitAIFeedback` in messageai-swift/Services/AIFeaturesService.swift:1853-1914 to capture rating, correction, and metadata fields and persist them to the Firestore `ai_feedback` collection via the injected FirestoreService. Added messageai-swift/AIFeedbackSheet.swift:11-151, a SwiftUI form with star picker, optional correction/comment inputs, validation, and loading/error states that invokes `submitAIFeedback` once the user is authenticated. Exposed the flow in messageai-swift/ThreadSummaryCard.swift:35-170 by introducing a hand.thumbsup feedback action that opens the sheet prefilled with the active summary context.\n</info added on 2025-10-24T23:38:57.792Z>",
+            "status": "done",
             "testStrategy": "UI test validating feedback sheet lifecycle and unit test confirming submission payload matches Firestore collection schema.",
             "parentId": "undefined"
           },
@@ -1050,7 +1050,7 @@
       ],
       "created": "2025-10-24T18:37:19.073Z",
       "description": "Tasks for master context",
-      "updated": "2025-10-24T23:20:36.795Z"
+      "updated": "2025-10-24T23:38:57.837Z"
     }
   }
 }

@@ -15,6 +15,7 @@ struct ThreadSummaryCard: View {
     let onRefresh: () -> Void
 
     @State private var isExpanded = false
+    @State private var showingFeedback = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -30,11 +31,23 @@ struct ThreadSummaryCard: View {
                     ProgressView()
                         .scaleEffect(0.8)
                 } else {
-                    Button(action: onRefresh) {
-                        Image(systemName: "arrow.clockwise")
-                            .foregroundStyle(.secondary)
+                    HStack(spacing: 12) {
+                        // Feedback button (only shown when summary exists)
+                        if summary != nil {
+                            Button {
+                                showingFeedback = true
+                            } label: {
+                                Image(systemName: "hand.thumbsup")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+
+                        Button(action: onRefresh) {
+                            Image(systemName: "arrow.clockwise")
+                                .foregroundStyle(.secondary)
+                        }
+                        .disabled(isLoading)
                     }
-                    .disabled(isLoading)
                 }
             }
 
@@ -147,6 +160,15 @@ struct ThreadSummaryCard: View {
         .background(.thinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
+        .sheet(isPresented: $showingFeedback) {
+            if let summary = summary {
+                AIFeedbackSheet(
+                    conversationId: summary.conversationId,
+                    featureType: "summary",
+                    originalContent: summary.summary
+                )
+            }
+        }
     }
 
     private func formatTimestamp(_ date: Date) -> String {

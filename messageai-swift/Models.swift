@@ -355,6 +355,7 @@ final class ThreadSummaryEntity {
     var messageCount: Int
     var createdAt: Date
     var updatedAt: Date
+    var expiresAt: Date
 
     init(
         id: String = UUID().uuidString,
@@ -364,7 +365,8 @@ final class ThreadSummaryEntity {
         generatedAt: Date,
         messageCount: Int,
         createdAt: Date = .init(),
-        updatedAt: Date = .init()
+        updatedAt: Date = .init(),
+        expiresAt: Date? = nil
     ) {
         self.id = id
         self.conversationId = conversationId
@@ -374,11 +376,17 @@ final class ThreadSummaryEntity {
         self.messageCount = messageCount
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        // Default TTL: 24 hours for summaries
+        self.expiresAt = expiresAt ?? Date().addingTimeInterval(24 * 60 * 60)
     }
 
     var keyPoints: [String] {
         get { LocalJSONCoder.decode(keyPointsData, fallback: []) }
         set { keyPointsData = LocalJSONCoder.encode(newValue) }
+    }
+
+    var isExpired: Bool {
+        Date() > expiresAt
     }
 }
 
@@ -437,6 +445,7 @@ final class SearchResultEntity {
     var rank: Int
     var timestamp: Date
     var createdAt: Date
+    var expiresAt: Date
 
     init(
         id: String = UUID().uuidString,
@@ -446,7 +455,8 @@ final class SearchResultEntity {
         snippet: String,
         rank: Int,
         timestamp: Date,
-        createdAt: Date = .init()
+        createdAt: Date = .init(),
+        expiresAt: Date? = nil
     ) {
         self.id = id
         self.conversationId = conversationId
@@ -456,6 +466,12 @@ final class SearchResultEntity {
         self.timestamp = timestamp
         self.query = query
         self.createdAt = createdAt
+        // Default TTL: 1 hour for search results
+        self.expiresAt = expiresAt ?? Date().addingTimeInterval(60 * 60)
+    }
+
+    var isExpired: Bool {
+        Date() > expiresAt
     }
 }
 
