@@ -48,6 +48,12 @@ final class AIFeaturesService {
     /// Per-conversation meeting suggestions error messages
     var meetingSuggestionsErrors: [String: String] = [:]
 
+    /// Per-conversation scheduling intent detection state
+    var schedulingIntentDetected: [String: Bool] = [:]
+
+    /// Per-conversation scheduling intent confidence scores
+    var schedulingIntentConfidence: [String: Double] = [:]
+
     // MARK: - Private Dependencies
 
     @ObservationIgnored
@@ -126,6 +132,10 @@ final class AIFeaturesService {
 
     @ObservationIgnored
     private var meetingSuggestionsCache: [String: CachedMeetingSuggestions] = [:]
+
+    /// Track conversations where we've already auto-prefetched meeting suggestions
+    @ObservationIgnored
+    private var prefetchedConversations: Set<String> = []
 
     // MARK: - Initialization
 
@@ -233,6 +243,9 @@ final class AIFeaturesService {
         searchCache.removeAll()
         actionItemsCache.removeAll()
         meetingSuggestionsCache.removeAll()
+        prefetchedConversations.removeAll()
+        schedulingIntentDetected.removeAll()
+        schedulingIntentConfidence.removeAll()
     }
 
     /// Reset service state (called on sign-out)
@@ -295,17 +308,111 @@ final class AIFeaturesService {
     ///   - conversationId: The ID of the conversation
     ///   - messageId: The ID of the message
     func onMessageMutation(conversationId: String, messageId: String) {
-        // This will be used by future AI features to trigger analysis
-        // For now, we just log the event for debugging
         #if DEBUG
         print("[AIFeaturesService] Message mutation: conversation=\(conversationId), message=\(messageId)")
         #endif
 
-        // Future implementations will trigger AI analysis here:
+        // Detect scheduling intent and auto-prefetch meeting suggestions
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            await self.handleSchedulingIntentDetection(conversationId: conversationId, messageId: messageId)
+        }
+
+        // Future implementations will trigger other AI analysis here:
         // - Check for action items
-        // - Detect scheduling intent
         // - Update priority scores
         // - Track decisions
+    }
+
+    /// Handle scheduling intent detection and auto-prefetch meeting suggestions
+    /// - Parameters:
+    ///   - conversationId: The ID of the conversation
+    ///   - messageId: The ID of the message
+    private func handleSchedulingIntentDetection(conversationId: String, messageId: String) async {
+        // Don't prefetch if we've already done it for this conversation
+        guard !prefetchedConversations.contains(conversationId) else {
+            return
+        }
+
+        // Fetch the message entity to check for scheduling intent
+        guard let modelContext = modelContext else { return }
+
+        let descriptor = FetchDescriptor<MessageEntity>(
+            predicate: #Predicate<MessageEntity> { message in
+                message.id == messageId
+            }
+        )
+
+        guard let message = try? modelContext.fetch(descriptor).first else {
+            return
+        }
+
+        // Check if message has scheduling intent with sufficient confidence
+        // Confidence threshold: 0.6 (same as backend threshold in detectSchedulingIntent)
+        guard let intent = message.schedulingIntent,
+              let confidence = message.intentConfidence,
+              confidence >= 0.6,
+              intent != "none" else {
+            return
+        }
+
+        #if DEBUG
+        print("[AIFeaturesService] Scheduling intent detected (confidence: \(confidence)) in conversation \(conversationId)")
+        #endif
+
+        // Update observable state for UI
+        schedulingIntentDetected[conversationId] = true
+        schedulingIntentConfidence[conversationId] = confidence
+
+        // Fetch conversation to get participant IDs
+        let convDescriptor = FetchDescriptor<ConversationEntity>(
+            predicate: #Predicate<ConversationEntity> { conversation in
+                conversation.id == conversationId
+            }
+        )
+
+        guard let conversation = try? modelContext.fetch(convDescriptor).first else {
+            return
+        }
+
+        // Filter out bot participants (those with "bot:" prefix)
+        let humanParticipants = conversation.participantIds.filter { !$0.hasPrefix("bot:") }
+
+        // Only prefetch for multi-participant conversations (excluding bots)
+        guard humanParticipants.count >= 2 else {
+            #if DEBUG
+            print("[AIFeaturesService] Skipping prefetch - not enough human participants (\(humanParticipants.count))")
+            #endif
+            return
+        }
+
+        // Mark as prefetched to prevent duplicates
+        prefetchedConversations.insert(conversationId)
+
+        // Auto-prefetch meeting suggestions (default 60 minute meeting)
+        do {
+            #if DEBUG
+            print("[AIFeaturesService] Auto-prefetching meeting suggestions for conversation \(conversationId)")
+            #endif
+
+            _ = try await suggestMeetingTimes(
+                conversationId: conversationId,
+                participantIds: humanParticipants,
+                durationMinutes: 60,
+                preferredDays: 14,
+                forceRefresh: false
+            )
+
+            #if DEBUG
+            print("[AIFeaturesService] Successfully prefetched meeting suggestions for conversation \(conversationId)")
+            #endif
+        } catch {
+            #if DEBUG
+            print("[AIFeaturesService] Failed to prefetch meeting suggestions: \(error.localizedDescription)")
+            #endif
+            // Remove from prefetched set so we can retry later
+            prefetchedConversations.remove(conversationId)
+        }
     }
 
     // MARK: - Thread Summary Persistence

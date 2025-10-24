@@ -176,6 +176,12 @@ final class MessageEntity {
     var priorityRationale: String?
     var priorityAnalyzedAt: Date?
 
+    // Scheduling intent metadata
+    var schedulingIntent: String?
+    var intentConfidence: Double?
+    var intentAnalyzedAt: Date?
+    var schedulingKeywordsData: Data = Data()
+
     init(
         id: String,
         conversationId: String,
@@ -188,7 +194,11 @@ final class MessageEntity {
         priorityScore: Int? = nil,
         priorityLabel: String? = nil,
         priorityRationale: String? = nil,
-        priorityAnalyzedAt: Date? = nil
+        priorityAnalyzedAt: Date? = nil,
+        schedulingIntent: String? = nil,
+        intentConfidence: Double? = nil,
+        intentAnalyzedAt: Date? = nil,
+        schedulingKeywords: [String] = []
     ) {
         self.id = id
         self.conversationId = conversationId
@@ -202,6 +212,10 @@ final class MessageEntity {
         self.priorityLabel = priorityLabel
         self.priorityRationale = priorityRationale
         self.priorityAnalyzedAt = priorityAnalyzedAt
+        self.schedulingIntent = schedulingIntent
+        self.intentConfidence = intentConfidence
+        self.intentAnalyzedAt = intentAnalyzedAt
+        self.schedulingKeywordsData = LocalJSONCoder.encode(schedulingKeywords)
     }
 
     var deliveryStatus: DeliveryStatus {
@@ -250,6 +264,15 @@ final class MessageEntity {
 
     var hasPriorityData: Bool {
         priorityAnalyzedAt != nil
+    }
+
+    var schedulingKeywords: [String] {
+        get { LocalJSONCoder.decode(schedulingKeywordsData, fallback: []) }
+        set { schedulingKeywordsData = LocalJSONCoder.encode(newValue) }
+    }
+
+    var hasSchedulingData: Bool {
+        intentAnalyzedAt != nil
     }
 }
 

@@ -988,6 +988,17 @@ final class MessagingService {
             let priorityRationale = data["priorityRationale"] as? String
             let priorityAnalyzedAt = (data["priorityAnalyzedAt"] as? Timestamp)?.dateValue()
 
+            // Parse scheduling intent metadata
+            let schedulingIntent = data["schedulingIntent"] as? String
+            let intentConfidence = data["intentConfidence"] as? Double
+            let intentAnalyzedAt = (data["intentAnalyzedAt"] as? Timestamp)?.dateValue()
+            let schedulingKeywords: [String] = {
+                if let keywords = data["schedulingKeywords"] as? [String] {
+                    return keywords
+                }
+                return []
+            }()
+
             var descriptor = FetchDescriptor<MessageEntity>(
                 predicate: #Predicate<MessageEntity> { message in
                     message.id == messageId
@@ -1007,6 +1018,10 @@ final class MessagingService {
                     existing.priorityLabel = priorityLabel
                     existing.priorityRationale = priorityRationale
                     existing.priorityAnalyzedAt = priorityAnalyzedAt
+                    existing.schedulingIntent = schedulingIntent
+                    existing.intentConfidence = intentConfidence
+                    existing.intentAnalyzedAt = intentAnalyzedAt
+                    existing.schedulingKeywords = schedulingKeywords
                 } else {
                     let message = MessageEntity(
                         id: messageId,
@@ -1020,7 +1035,11 @@ final class MessagingService {
                         priorityScore: priorityScore,
                         priorityLabel: priorityLabel,
                         priorityRationale: priorityRationale,
-                        priorityAnalyzedAt: priorityAnalyzedAt
+                        priorityAnalyzedAt: priorityAnalyzedAt,
+                        schedulingIntent: schedulingIntent,
+                        intentConfidence: intentConfidence,
+                        intentAnalyzedAt: intentAnalyzedAt,
+                        schedulingKeywords: schedulingKeywords
                     )
                     modelContext.insert(message)
                 }

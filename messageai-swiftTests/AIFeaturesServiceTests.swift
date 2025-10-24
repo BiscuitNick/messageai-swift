@@ -566,4 +566,307 @@ final class AIFeaturesServiceTests: XCTestCase {
         XCTAssertEqual(entity?.durationMinutes, 90)
         XCTAssertEqual(entity?.participantCount, 3)
     }
+
+    // MARK: - Scheduling Intent Detection Tests
+
+    func testSchedulingIntentStateExposedToUI() throws {
+        // Verify that scheduling intent state is exposed to UI
+        XCTAssertEqual(service.schedulingIntentDetected.count, 0)
+        XCTAssertEqual(service.schedulingIntentConfidence.count, 0)
+    }
+
+    func testOnMessageMutationWithoutSchedulingIntent() async throws {
+        // Configure service with mock dependencies
+        let authService = AuthService()
+        let messagingService = MessagingService()
+        let firestoreService = FirestoreService()
+
+        service.configure(
+            modelContext: modelContext,
+            authService: authService,
+            messagingService: messagingService,
+            firestoreService: firestoreService
+        )
+
+        // Create conversation
+        let conversation = ConversationEntity(
+            id: "conv-no-intent",
+            participantIds: ["user-1", "user-2"],
+            isGroup: false
+        )
+        modelContext.insert(conversation)
+
+        // Create message without scheduling intent
+        let message = MessageEntity(
+            id: "msg-no-intent",
+            conversationId: "conv-no-intent",
+            senderId: "user-1",
+            text: "Just a regular message"
+        )
+        modelContext.insert(message)
+        try modelContext.save()
+
+        // Call onMessageMutation
+        service.onMessageMutation(conversationId: "conv-no-intent", messageId: "msg-no-intent")
+
+        // Wait for async task to complete
+        try await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+
+        // Verify no scheduling intent detected
+        XCTAssertNil(service.schedulingIntentDetected["conv-no-intent"])
+        XCTAssertNil(service.schedulingIntentConfidence["conv-no-intent"])
+    }
+
+    func testOnMessageMutationWithLowConfidenceIntent() async throws {
+        // Configure service
+        let authService = AuthService()
+        let messagingService = MessagingService()
+        let firestoreService = FirestoreService()
+
+        service.configure(
+            modelContext: modelContext,
+            authService: authService,
+            messagingService: messagingService,
+            firestoreService: firestoreService
+        )
+
+        // Create conversation
+        let conversation = ConversationEntity(
+            id: "conv-low",
+            participantIds: ["user-1", "user-2"],
+            isGroup: false
+        )
+        modelContext.insert(conversation)
+
+        // Create message with low confidence (below threshold of 0.6)
+        let message = MessageEntity(
+            id: "msg-low",
+            conversationId: "conv-low",
+            senderId: "user-1",
+            text: "Maybe we could meet?",
+            schedulingIntent: "low",
+            intentConfidence: 0.4,
+            intentAnalyzedAt: Date()
+        )
+        modelContext.insert(message)
+        try modelContext.save()
+
+        // Call onMessageMutation
+        service.onMessageMutation(conversationId: "conv-low", messageId: "msg-low")
+
+        // Wait for async task
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        // Verify no prefetch occurred (confidence too low)
+        XCTAssertNil(service.schedulingIntentDetected["conv-low"])
+    }
+
+    func testOnMessageMutationWithHighConfidenceIntent() async throws {
+        // Configure service
+        let authService = AuthService()
+        let messagingService = MessagingService()
+        let firestoreService = FirestoreService()
+
+        service.configure(
+            modelContext: modelContext,
+            authService: authService,
+            messagingService: messagingService,
+            firestoreService: firestoreService
+        )
+
+        // Create conversation with 2+ human participants
+        let conversation = ConversationEntity(
+            id: "conv-high",
+            participantIds: ["user-1", "user-2"],
+            isGroup: false
+        )
+        modelContext.insert(conversation)
+
+        // Create message with high confidence (above threshold)
+        let message = MessageEntity(
+            id: "msg-high",
+            conversationId: "conv-high",
+            senderId: "user-1",
+            text: "Let's schedule a meeting for Friday at 3pm",
+            schedulingIntent: "high",
+            intentConfidence: 0.92,
+            intentAnalyzedAt: Date(),
+            schedulingKeywords: ["schedule", "meeting", "Friday", "3pm"]
+        )
+        modelContext.insert(message)
+        try modelContext.save()
+
+        // Call onMessageMutation
+        service.onMessageMutation(conversationId: "conv-high", messageId: "msg-high")
+
+        // Wait for async task
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        // Verify scheduling intent was detected and exposed to UI
+        XCTAssertEqual(service.schedulingIntentDetected["conv-high"], true)
+        XCTAssertEqual(service.schedulingIntentConfidence["conv-high"], 0.92)
+
+        // Note: Actual prefetch will fail without Firebase auth, but state should still be set
+    }
+
+    func testOnMessageMutationWithBotParticipant() async throws {
+        // Configure service
+        let authService = AuthService()
+        let messagingService = MessagingService()
+        let firestoreService = FirestoreService()
+
+        service.configure(
+            modelContext: modelContext,
+            authService: authService,
+            messagingService: messagingService,
+            firestoreService: firestoreService
+        )
+
+        // Create conversation with only 1 human (other is bot)
+        let conversation = ConversationEntity(
+            id: "conv-bot",
+            participantIds: ["user-1", "bot:dash-bot"],
+            isGroup: false
+        )
+        modelContext.insert(conversation)
+
+        // Create message with high confidence
+        let message = MessageEntity(
+            id: "msg-bot",
+            conversationId: "conv-bot",
+            senderId: "user-1",
+            text: "Schedule a meeting",
+            schedulingIntent: "high",
+            intentConfidence: 0.85,
+            intentAnalyzedAt: Date()
+        )
+        modelContext.insert(message)
+        try modelContext.save()
+
+        // Call onMessageMutation
+        service.onMessageMutation(conversationId: "conv-bot", messageId: "msg-bot")
+
+        // Wait for async task
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        // Should detect intent but not prefetch (not enough human participants)
+        XCTAssertNil(service.schedulingIntentDetected["conv-bot"])
+    }
+
+    func testPrefetchOnlyOncePerConversation() async throws {
+        // Configure service
+        let authService = AuthService()
+        let messagingService = MessagingService()
+        let firestoreService = FirestoreService()
+
+        service.configure(
+            modelContext: modelContext,
+            authService: authService,
+            messagingService: messagingService,
+            firestoreService: firestoreService
+        )
+
+        // Create conversation
+        let conversation = ConversationEntity(
+            id: "conv-once",
+            participantIds: ["user-1", "user-2", "user-3"],
+            isGroup: true
+        )
+        modelContext.insert(conversation)
+
+        // Create first message with scheduling intent
+        let message1 = MessageEntity(
+            id: "msg-once-1",
+            conversationId: "conv-once",
+            senderId: "user-1",
+            text: "Let's meet tomorrow",
+            schedulingIntent: "high",
+            intentConfidence: 0.88,
+            intentAnalyzedAt: Date()
+        )
+        modelContext.insert(message1)
+
+        // Create second message with scheduling intent
+        let message2 = MessageEntity(
+            id: "msg-once-2",
+            conversationId: "conv-once",
+            senderId: "user-2",
+            text: "Yes, what time works?",
+            schedulingIntent: "medium",
+            intentConfidence: 0.7,
+            intentAnalyzedAt: Date()
+        )
+        modelContext.insert(message2)
+        try modelContext.save()
+
+        // Call onMessageMutation for first message
+        service.onMessageMutation(conversationId: "conv-once", messageId: "msg-once-1")
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        // Verify first detection
+        XCTAssertEqual(service.schedulingIntentDetected["conv-once"], true)
+        XCTAssertEqual(service.schedulingIntentConfidence["conv-once"], 0.88)
+
+        // Call onMessageMutation for second message
+        service.onMessageMutation(conversationId: "conv-once", messageId: "msg-once-2")
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        // Confidence should still be from first message (no update on second)
+        XCTAssertEqual(service.schedulingIntentConfidence["conv-once"], 0.88)
+    }
+
+    func testSchedulingIntentWithNoneClassification() async throws {
+        // Configure service
+        let authService = AuthService()
+        let messagingService = MessagingService()
+        let firestoreService = FirestoreService()
+
+        service.configure(
+            modelContext: modelContext,
+            authService: authService,
+            messagingService: messagingService,
+            firestoreService: firestoreService
+        )
+
+        // Create conversation
+        let conversation = ConversationEntity(
+            id: "conv-none",
+            participantIds: ["user-1", "user-2"],
+            isGroup: false
+        )
+        modelContext.insert(conversation)
+
+        // Create message classified as "none" even with high confidence
+        let message = MessageEntity(
+            id: "msg-none",
+            conversationId: "conv-none",
+            senderId: "user-1",
+            text: "The weather is nice",
+            schedulingIntent: "none",
+            intentConfidence: 0.95,
+            intentAnalyzedAt: Date()
+        )
+        modelContext.insert(message)
+        try modelContext.save()
+
+        // Call onMessageMutation
+        service.onMessageMutation(conversationId: "conv-none", messageId: "msg-none")
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        // Verify no prefetch (intent is "none")
+        XCTAssertNil(service.schedulingIntentDetected["conv-none"])
+    }
+
+    func testClearCachesResetsSchedulingState() throws {
+        // Set some scheduling intent state
+        service.schedulingIntentDetected["conv-test"] = true
+        service.schedulingIntentConfidence["conv-test"] = 0.85
+
+        // Clear caches
+        service.clearCaches()
+
+        // Verify scheduling state is cleared
+        XCTAssertEqual(service.schedulingIntentDetected.count, 0)
+        XCTAssertEqual(service.schedulingIntentConfidence.count, 0)
+    }
 }

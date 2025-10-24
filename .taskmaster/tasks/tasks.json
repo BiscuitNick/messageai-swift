@@ -2,7 +2,7 @@
   "master": {
     "tasks": [
       {
-        "id": "1",
+        "id": 1,
         "title": "Establish AI Features Service Layer",
         "description": "Create a centralized AIFeaturesService and supporting plumbing so the iOS app can orchestrate AI workflows via Firebase functions.",
         "details": "Implementation outline:\n- Add `messageai-swift/Services/AIFeaturesService.swift` with @Observable class that keeps references to `Firestore`, `Functions`, caches, and exposes async helpers for summaries, action items, search, priority updates, decisions, and proactive insights.\n- Inject the service into the SwiftUI environment in `messageai_swiftApp.swift` and `ContentView` alongside existing services, and manage lifecycle (sign-in/out) with `AuthService`.\n- Extend `MessagingService` and `FirestoreService` with lightweight delegates or callbacks so AIFeaturesService can observe message mutations without duplicating listeners.\nPseudo-code:\n```\n@Observable final class AIFeaturesService {\n    private let functions = Functions.functions(region: \"us-central1\")\n    func call<T: Decodable>(_ name: String, payload: [String: Any]) async throws -> T {\n        let result = try await functions.httpsCallable(name).call(payload)\n        return try decode(result.data)\n    }\n}\n```\n- Prepare shared DTOs (Codable structs) for responses in `messageai-swift/Models/AIModels.swift` to avoid duplicating parsing logic.\n- Ensure background task support by scheduling Task.detached calls and posting updates via MainActor for UI bindings.",
@@ -90,7 +90,7 @@
         "expansionPrompt": "Ask Task Master to produce subtasks covering: (1) scaffolding `AIFeaturesService` with Firebase Functions and Firestore clients; (2) registering the service in `messageai_swiftApp.swift` and `ContentView`; (3) adding delegate or callback hooks in `MessagingService` and `FirestoreService`; (4) introducing shared Codable DTOs in `Models.swift`; (5) handling auth lifecycle, caching, and background `Task` usage; (6) writing unit coverage for DTO decoding and environment injection."
       },
       {
-        "id": "2",
+        "id": 2,
         "title": "Deliver Thread Summarization End-to-End",
         "description": "Implement backend and frontend flow that summarizes chat threads on demand.",
         "details": "Implementation outline:\n- Extend `functions/src/index.ts` with callable `summarizeThread` that fetches last N messages from Firestore (conversation subcollection), batches content, and calls OpenAI GPT-4o-mini with system prompt prioritizing decisions, action items, updates, next steps.\nPseudo-code:\n```\nconst summarizeThread = onCall(async ({ data, auth }) => {\n  const messages = await fetchMessages(data.conversationId, 50);\n  const prompt = buildSummaryPrompt(messages);\n  const response = await openai.responses.create({ model: \"gpt-4o-mini\", input: prompt });\n  return formatSummary(response);\n});\n```\n- In iOS, add `ThreadSummaryEntity` (conversationId, summary, createdAt, sourceRange) to `Models.swift` and persistence helpers in AIFeaturesService.\n- Extend AIFeaturesService with `summarizeThread(conversation:)` that handles optimistic loading, caches result, and saves summary if user chooses.\n- Update `ChatView` to add long-press action sheet entry and header button that presents `ThreadSummaryCard` (new SwiftUI view showing expandable summary, save button, timestamp).\n- Respect offline state by queuing request via NetworkMonitor and surfacing errors through Alert.\n",
@@ -196,7 +196,7 @@
         "expansionPrompt": "Have Task Master split this into: (1) implementing the `summarizeThread` callable in `functions/src/index.ts`; (2) defining summary DTOs and persistence helpers in `Models.swift`; (3) adding the async `summarizeThread` API inside `AIFeaturesService`; (4) wiring optimistic loading, caching, and error surfacing; (5) building `ThreadSummaryCard` plus ChatView entry points; (6) integrating optional save flows; (7) creating Jest, XCTest, and UI tests per the strategy."
       },
       {
-        "id": "3",
+        "id": 3,
         "title": "Implement Action Item Extraction Workflow",
         "description": "Enable automatic detection, storage, and display of actionable tasks within a conversation.",
         "details": "Implementation outline:\n- Add callable `extractActionItems` in `functions/src/index.ts` that gathers recent messages (default 7 days), prompts OpenAI for structured JSON with fields {id, task, assignee, dueDate, priority, status}, validates with zod, and upserts to Firestore subcollection `actionItems`.\n- Create SwiftData `ActionItemEntity` (id, conversationId, task, assigneeId/email, dueDate, priority enum, status enum, createdAt, updatedAt) in `Models.swift` and syncing helpers in `FirestoreService` to mirror remote changes locally.\nPseudo-code:\n```\nfunc extractActionItems(conversationId: String) async throws -> [ActionItem] {\n    let payload = [\"conversationId\": conversationId, \"windowDays\": 7]\n    let result: ActionItemResponse = try await call(\"extractActionItems\", payload: payload)\n    try await save(result.items)\n    return result.items\n}\n```\n- Add `ActionItemsTabView` within `ChatView` (segmented control or toolbar button) showing list grouped by status with checkboxes tied to SwiftData writes.\n- Allow manual item creation/editing using bottom sheet that writes to Firestore for parity with AI extraction.\n",
@@ -313,7 +313,7 @@
         "expansionPrompt": "Request subtasks that cover: (1) creating the `extractActionItems` callable with OpenAI + zod validation; (2) defining Firestore upsert logic for the `actionItems` subcollection; (3) adding `ActionItemEntity` and any related enums in `Models.swift`; (4) extending `FirestoreService` or `AIFeaturesService` to sync that subcollection; (5) exposing extraction and persistence helpers in `AIFeaturesService`; (6) building the Action Items tab, grouping UI, and CRUD flows in SwiftUI; (7) wiring manual create/edit operations back to Firestore; (8) implementing emulator, unit, and UI tests."
       },
       {
-        "id": "4",
+        "id": 4,
         "title": "Ship Semantic Smart Search Experience",
         "description": "Provide global AI-powered search across conversations with semantic ranking and deep links.",
         "details": "Implementation outline:\n- Implement callable `smartSearch` in `functions/src/index.ts` that aggregates user conversation IDs, streams message snippets into OpenAI embedding or response API, and returns ranked results grouped by conversation with messageId, preview text, timestamp.\nPseudo-code:\n```\nconst smartSearch = onCall(async ({ data, auth }) => {\n  const { query } = data;\n  const docs = await collectMessages(auth.uid);\n  const response = await openai.responses.create({\n     model: \"gpt-4o-mini\",\n     input: buildSearchPrompt(query, docs)\n  });\n  return normalizeSearchHits(response);\n});\n```\n- Add `SearchResultEntity` (query, conversationId, messageId, snippet, rank, createdAt) and caching logic in AIFeaturesService (`smartSearch(query:)`).\n- Create `SmartSearchView` presented from `ConversationsRootView` search bar; display grouped List with tappable rows that navigate via `NavigationLink(value:)` to `ChatView` and scroll to message using `.scrollTo`.\n- Persist recent queries and surface suggestions when search field focused, clearing caches on logout.\n",
@@ -412,7 +412,7 @@
         "expansionPrompt": "Generate subtasks such as: (1) adding the `smartSearch` callable in `functions/src/index.ts` with ranking logic; (2) defining Codable models or SwiftData cache structures for search results; (3) exposing `smartSearch(query:)` and caching in `AIFeaturesService`; (4) persisting recent queries and eviction on logout; (5) creating `SmartSearchView` with navigation into `ChatView`; (6) integrating the new view with `ConversationsRootView`; (7) adding Jest, unit, and UI automation coverage."
       },
       {
-        "id": "5",
+        "id": 5,
         "title": "Deploy Priority Message Detection Pipeline",
         "description": "Classify incoming messages by urgency and expose indicators throughout the app.",
         "details": "Implementation outline:\n- Add Firestore trigger `onDocumentCreated` in `functions/src/index.ts` for `conversations/{conversationId}/messages/{messageId}` that skips bot/system senders, calls OpenAI for priority classification (1-5 scale) plus rationale, and patches message doc fields `priorityScore`, `priorityLabel`, `priorityAnalyzedAt`.\nPseudo-code:\n```\nexport const analyzeMessagePriority = onDocumentCreated(path, async (event) => {\n  const message = event.data?.data();\n  if (!shouldClassify(message)) return;\n  const analysis = await classifyPriority(message.text);\n  await event.data?.ref.set(analysis, { merge: true });\n});\n```\n- Update `MessageEntity` in `Models.swift` with priority properties and migration-safe defaults; adjust `MessagingService` listener to parse new fields and update SwiftData.\n- Add priority badges (🔥 etc) in `MessageBubble` and priority filter in `ConversationsRootView`, reusing existing `searchText` state for filtering.\n- Update `NotificationService` to choose sound/category based on priority label, respecting foreground state.\n",
@@ -500,7 +500,7 @@
         "expansionPrompt": "Ask for subtasks that: (1) add the Firestore onCreate trigger performing priority classification; (2) persist priority fields on message docs; (3) extend `MessageEntity` with priority score/label defaults; (4) update `MessagingService` parsing and local sync logic; (5) add badges, filters, and notification sound/category handling in the UI and NotificationService; (6) create emulator, unit, and UI tests."
       },
       {
-        "id": "6",
+        "id": 6,
         "title": "Implement Decision Tracking System",
         "description": "Identify, persist, and visualize team decisions derived from chat conversations.",
         "details": "Implementation outline:\n- Create callable `trackDecisions` in `functions/src/index.ts` that scans conversation history window (configurable 30 days), prompts OpenAI for structured decisions with context, participants, follow-up status, and writes to Firestore `decisions` subcollection.\nPseudo-code:\n```\nfunc trackDecisions(conversationId: String) async throws -> [Decision] {\n    let payload = [\"conversationId\": conversationId, \"windowDays\": 30]\n    let response: DecisionResponse = try await call(\"trackDecisions\", payload: payload)\n    try await persistDecisions(response.items)\n    return response.items\n}\n```\n- Add `DecisionEntity` to SwiftData (decisionText, contextSummary, participants, decidedAt, followUpStatus, reminders) and syncing hooks in `FirestoreService`.\n- Build `DecisionsTabView` (segmented with Action Items) inside ChatView showing timeline view, ability to mark status, schedule reminders via `NotificationService`.\n- Implement optional manual add/edit flow, ensuring updates round-trip to Firestore.\n",
@@ -616,7 +616,7 @@
         "expansionPrompt": "Break this into subtasks covering: (1) implementing the `trackDecisions` callable with Firestore writes; (2) modeling `DecisionEntity` and related SwiftData relationships; (3) syncing decision subcollections via `AIFeaturesService` or `FirestoreService`; (4) exposing decision fetch and persistence APIs; (5) building the Decisions tab UI with timeline, status changes, and reminder hooks; (6) integrating reminder scheduling through `NotificationService`; (7) supporting manual add/edit flows; (8) delivering the specified tests."
       },
       {
-        "id": "7",
+        "id": 7,
         "title": "Build Meeting Suggestion Engine for Proactive Assistant",
         "description": "Provide AI-generated meeting time proposals tailored to participant availability.",
         "details": "Implementation outline:\n- Implement callable `suggestMeetingTimes` in `functions/src/index.ts` that aggregates participants' historical message activity, optional calendar availability (stub if unavailable), applies time-zone heuristics, and requests OpenAI to return 3-5 ranked options with justification text.\n- Introduce `MeetingSuggestionEntity` (conversationId, suggestions array, generatedAt, expiresAt) in SwiftData and persistence helpers in AIFeaturesService.\nPseudo-code:\n```\nfunc suggestMeetingTimes(participants: [String], durationMinutes: Int) async throws -> MeetingSuggestionResult {\n    let payload = [\"conversationId\": id, \"participantIds\": participants, \"duration\": durationMinutes]\n    return try await call(\"suggestMeetingTimes\", payload: payload)\n}\n```\n- Extend ChatView with Smart Suggestions panel that slides in when API returns suggestions; include CTA buttons to copy invite text or share to calendar (using `UIApplication.shared.open` for deep links).\n- Add analytics counters (stored in Firestore `analytics/meetingSuggestions`) for success metrics.\n",
@@ -722,14 +722,14 @@
         "updatedAt": "2025-10-24T18:31:05.392Z"
       },
       {
-        "id": "8",
+        "id": 8,
         "title": "Detect Scheduling Intent and Surface Smart Suggestions",
         "description": "Automatically monitor conversations for scheduling cues and launch assistance UI.",
         "details": "Implementation outline:\n- Add Firestore trigger or event-driven pipeline (e.g., reuse priority trigger) that inspects new messages for scheduling intent using OpenAI classification; write flag to message doc (`schedulingIntent`, `intentConfidence`).\n- Update AIFeaturesService to subscribe to conversation message stream and, when high-confidence intent detected, pre-fetch meeting suggestions and expose state to UI via Combine-like bindings.\nPseudo-code:\n```\nfunc handleSchedulingIntent(message: MessageEntity) {\n    guard message.schedulingIntent == true else { return }\n    Task { await self.fetchSuggestionsIfNeeded(for: message.conversationId) }\n}\n```\n- Modify ChatView to display Smart Suggestions panel automatically with context banner, including dismiss/snooze controls persisted in SwiftData to prevent repeated prompts.\n- Add local notification support for scheduling prompts when user is away (via NotificationService custom category).\n",
         "testStrategy": "- Emulator test verifying scheduling classifier adds correct fields and does not trigger on low-confidence cases.\n- Swift unit test ensuring debounce logic prevents duplicate fetches and snooze persists across app launches.\n- UI test simulating incoming scheduling message and asserting panel auto-appears and respects dismiss action.",
         "priority": "medium",
         "dependencies": [],
-        "status": "pending",
+        "status": "in-progress",
         "subtasks": [
           {
             "id": 1,
@@ -748,8 +748,8 @@
             "dependencies": [
               1
             ],
-            "details": "Modify MessageEntity, Firestore decoders, and MessagingService snapshot handling to map schedulingIntent and intentConfidence, preserving backward compatibility with older documents.",
-            "status": "pending",
+            "details": "Modify MessageEntity, Firestore decoders, and MessagingService snapshot handling to map schedulingIntent and intentConfidence, preserving backward compatibility with older documents.\n<info added on 2025-10-24T18:42:10.602Z>\nMessageEntity now persists schedulingIntent, intentConfidence, intentAnalyzedAt, and encoded schedulingKeywordsData with computed schedulingKeywords and hasSchedulingData accessors, defaulting nil or empty values in messageai-swift/Models.swift to keep prior documents valid. MessagingService handleMessageSnapshot parses schedulingIntent, intentConfidence, intentAnalyzedAt, and schedulingKeywords from Firestore snapshots for both updates and inserts so legacy messages still decode without failures in messageai-swift/Services/MessagingService.swift. Added messageai-swiftTests/MessageEntityTests.swift cases covering initialization with and without scheduling metadata, keyword encoding round-trips, confidence level handling, coexistence with priority fields, and edge scenarios like empty, large, or special keyword sets to confirm backward compatibility.\n</info added on 2025-10-24T18:42:10.602Z>",
+            "status": "done",
             "testStrategy": "Write Swift unit tests covering decoding with and without scheduling metadata and validating MessagingService broadcasts updated entities.",
             "parentId": "undefined"
           },
@@ -760,8 +760,8 @@
             "dependencies": [
               2
             ],
-            "details": "Introduce Combine-like publishers that react to high-confidence schedulingIntent, invoke meeting suggestion fetches once per conversation, and expose state to the UI.",
-            "status": "pending",
+            "details": "Introduce Combine-like publishers that react to high-confidence schedulingIntent, invoke meeting suggestion fetches once per conversation, and expose state to the UI.\n<info added on 2025-10-24T18:45:38.906Z>\nmessageai-swift/Services/AIFeaturesService.swift:52-55 now exposes schedulingIntentDetected and schedulingIntentConfidence dictionaries so ChatView can surface detection indicators, while lines 136-138 track prefetchedConversations to prevent duplicate auto-fetches. onMessageMutation (messageai-swift/Services/AIFeaturesService.swift:310-325) launches handleSchedulingIntentDetection asynchronously with a weak self capture, and the new helper (messageai-swift/Services/AIFeaturesService.swift:327-416) enforces the 0.6 confidence threshold, ignores “none” intents, filters bot: participants, marks prefetched conversations, invokes suggestMeetingTimes with a 60-minute default, and removes the marker on failure after updating the UI-facing dictionaries. clearCaches (messageai-swift/Services/AIFeaturesService.swift:241-249) now resets prefetchedConversations and the scheduling intent state cache. Added regression coverage in messageai-swiftTests/AIFeaturesServiceTests.swift:570-872 for UI exposure, low/high confidence handling, bot filtering, once-per-conversation prefetching, “none” classifications, and cache reset behavior.\n</info added on 2025-10-24T18:45:38.906Z>",
+            "status": "done",
             "testStrategy": "Create service-level unit tests using mocked message streams verifying prefetch kicks off only once per qualifying message and exposes expected state.",
             "parentId": "undefined"
           },
@@ -837,10 +837,11 @@
         ],
         "complexity": 9,
         "recommendedSubtasks": 8,
-        "expansionPrompt": "Have Task Master outline subtasks covering: (1) creating the Firestore trigger or pipeline that annotates messages with scheduling intent; (2) extending data models and listeners to capture `schedulingIntent` and confidence; (3) adding reactive logic in `AIFeaturesService` to prefetch meeting suggestions; (4) debouncing and snooze persistence in SwiftData; (5) updating ChatView to auto-present and dismiss the Smart Suggestions panel; (6) integrating NotificationService with a scheduling notification category; (7) coordinating state with `NetworkMonitor`; (8) adding emulator, unit, and UI tests."
+        "expansionPrompt": "Have Task Master outline subtasks covering: (1) creating the Firestore trigger or pipeline that annotates messages with scheduling intent; (2) extending data models and listeners to capture `schedulingIntent` and confidence; (3) adding reactive logic in `AIFeaturesService` to prefetch meeting suggestions; (4) debouncing and snooze persistence in SwiftData; (5) updating ChatView to auto-present and dismiss the Smart Suggestions panel; (6) integrating NotificationService with a scheduling notification category; (7) coordinating state with `NetworkMonitor`; (8) adding emulator, unit, and UI tests.",
+        "updatedAt": "2025-10-24T18:35:15.918Z"
       },
       {
-        "id": "9",
+        "id": 9,
         "title": "Launch Proactive Coordination Dashboard and Notifications",
         "description": "Continuously analyze team activity to surface coordination alerts and status overview.",
         "details": "Implementation outline:\n- Add scheduled Cloud Function (hourly via `onSchedule`) that scans conversations for unresolved action items, stale decisions, and upcoming deadlines; store summarized insights in Firestore collection `coordinationInsights` keyed by team/user.\nPseudo-code:\n```\nconst proactiveCoordinator = onSchedule(\"every 60 minutes\", async () => {\n  const insights = await analyzeTeamState();\n  await saveInsights(insights);\n});\n```\n- Create SwiftData entities `CoordinationInsightEntity` and `ProactiveAlertEntity` with expiry metadata, and update AIFeaturesService to sync them periodically (e.g., background task with `async let`).\n- Add `CoordinationDashboardView` accessible from new toolbar button or Profile tab, summarizing pending decisions, blockers, scheduling conflicts with actionable links into conversations.\n- Hook NotificationService to deliver proactive alerts (respecting <5% false positives) using UNNotificationCategory and custom sound assets for high-severity alerts.\n",
@@ -950,7 +951,7 @@
         "expansionPrompt": "Generate subtasks like: (1) creating the scheduled coordination analysis function in `functions/src/index.ts`; (2) defining SwiftData entities for coordination insights and proactive alerts; (3) building sync and purge routines in `AIFeaturesService`; (4) wiring background refresh using `Task.detached` or similar; (5) implementing `CoordinationDashboardView` with drill-ins; (6) updating `NotificationService` with alert categories, sounds, and deduping; (7) ensuring logout clears cached insights; (8) adding emulator, unit, and UI automation coverage."
       },
       {
-        "id": "10",
+        "id": 10,
         "title": "Finalize AI Feature Quality, Metrics, and Resilience",
         "description": "Harden the AI feature set with telemetry, caching, error handling, and end-to-end validation.",
         "details": "Implementation outline:\n- Implement retry/backoff utilities in AIFeaturesService for OpenAI failures, plus offline caching via SwiftData for summaries/search results with TTL invalidation.\n- Add logging/metrics pipeline (e.g., Firestore `analytics` docs or Firebase Crashlytics breadcrumbs) for AI call latency, success/failure counts, accuracy feedback loops.\nPseudo-code:\n```\nfunc callWithRetry(name: String, payload: [String: Any]) async throws -> Data {\n    var attempts = 0\n    while attempts < 3 {\n        do { return try await call(name, payload: payload) }\n        catch { attempts += 1; try await Task.sleep(nanoseconds: 2^attempts * 100_000_000) }\n    }\n    throw AIError.retryExhausted\n}\n```\n- Create in-app feedback mechanism (e.g., sheet on summary/action item card) that posts user corrections to Firestore `aiFeedback` collection for later tuning.\n- Run comprehensive manual + automated regression checklist covering all AI features, ensuring existing messaging flows remain unaffected, and document results in `TASKS.md` or new QA report.\n",
@@ -1041,12 +1042,15 @@
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2025-10-24T18:31:05.393Z",
+      "lastModified": "2025-10-24T18:35:15.919Z",
       "taskCount": 10,
       "completedCount": 7,
       "tags": [
         "master"
-      ]
+      ],
+      "created": "2025-10-24T18:37:19.073Z",
+      "description": "Tasks for master context",
+      "updated": "2025-10-24T18:45:47.490Z"
     }
   }
 }

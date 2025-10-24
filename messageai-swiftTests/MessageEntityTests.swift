@@ -370,4 +370,249 @@ final class MessageEntityTests: XCTestCase {
         // Should fallback to .sending
         XCTAssertEqual(message.deliveryStatus, .sending)
     }
+
+    // MARK: - Scheduling Intent Metadata Tests
+
+    func testInitializationWithSchedulingMetadata() throws {
+        let id = "msg-scheduling-1"
+        let conversationId = "conv-123"
+        let senderId = "user-1"
+        let text = "Let's meet tomorrow at 2pm"
+        let timestamp = Date()
+        let schedulingIntent = "high"
+        let intentConfidence = 0.85
+        let intentAnalyzedAt = Date()
+        let schedulingKeywords = ["meet", "tomorrow", "2pm"]
+
+        let message = MessageEntity(
+            id: id,
+            conversationId: conversationId,
+            senderId: senderId,
+            text: text,
+            timestamp: timestamp,
+            schedulingIntent: schedulingIntent,
+            intentConfidence: intentConfidence,
+            intentAnalyzedAt: intentAnalyzedAt,
+            schedulingKeywords: schedulingKeywords
+        )
+
+        XCTAssertEqual(message.schedulingIntent, schedulingIntent)
+        XCTAssertEqual(message.intentConfidence, intentConfidence)
+        XCTAssertNotNil(message.intentAnalyzedAt)
+        XCTAssertEqual(message.schedulingKeywords, schedulingKeywords)
+        XCTAssertTrue(message.hasSchedulingData)
+    }
+
+    func testInitializationWithoutSchedulingMetadata() throws {
+        let message = MessageEntity(
+            id: "msg-no-scheduling",
+            conversationId: "conv-123",
+            senderId: "user-1",
+            text: "Just a regular message"
+        )
+
+        // Verify backward compatibility - should handle missing scheduling data
+        XCTAssertNil(message.schedulingIntent)
+        XCTAssertNil(message.intentConfidence)
+        XCTAssertNil(message.intentAnalyzedAt)
+        XCTAssertEqual(message.schedulingKeywords, [])
+        XCTAssertFalse(message.hasSchedulingData)
+    }
+
+    func testSchedulingKeywordsEncodingDecoding() throws {
+        let keywords = ["meeting", "schedule", "calendar", "appointment"]
+        let message = MessageEntity(
+            id: "msg-keywords",
+            conversationId: "conv-123",
+            senderId: "user-1",
+            text: "Schedule a meeting",
+            schedulingKeywords: keywords
+        )
+
+        XCTAssertEqual(message.schedulingKeywords, keywords)
+    }
+
+    func testSchedulingKeywordsWithEmptyArray() throws {
+        let message = MessageEntity(
+            id: "msg-empty-keywords",
+            conversationId: "conv-123",
+            senderId: "user-1",
+            text: "Test",
+            schedulingKeywords: []
+        )
+
+        XCTAssertEqual(message.schedulingKeywords, [])
+    }
+
+    func testSchedulingKeywordsSetter() throws {
+        let message = MessageEntity(
+            id: "msg-1",
+            conversationId: "conv-1",
+            senderId: "user-1",
+            text: "Test"
+        )
+
+        // Initially empty
+        XCTAssertEqual(message.schedulingKeywords, [])
+
+        // Set keywords
+        message.schedulingKeywords = ["meet", "tomorrow"]
+        XCTAssertEqual(message.schedulingKeywords, ["meet", "tomorrow"])
+
+        // Update keywords
+        message.schedulingKeywords = ["meet", "tomorrow", "noon"]
+        XCTAssertEqual(message.schedulingKeywords, ["meet", "tomorrow", "noon"])
+    }
+
+    func testSchedulingIntentLowConfidence() throws {
+        let message = MessageEntity(
+            id: "msg-low-conf",
+            conversationId: "conv-123",
+            senderId: "user-1",
+            text: "Maybe we could meet?",
+            schedulingIntent: "low",
+            intentConfidence: 0.3,
+            intentAnalyzedAt: Date()
+        )
+
+        XCTAssertEqual(message.schedulingIntent, "low")
+        XCTAssertEqual(message.intentConfidence, 0.3)
+        XCTAssertTrue(message.hasSchedulingData)
+    }
+
+    func testSchedulingIntentHighConfidence() throws {
+        let message = MessageEntity(
+            id: "msg-high-conf",
+            conversationId: "conv-123",
+            senderId: "user-1",
+            text: "Let's schedule a meeting for Friday at 3pm",
+            schedulingIntent: "high",
+            intentConfidence: 0.95,
+            intentAnalyzedAt: Date(),
+            schedulingKeywords: ["schedule", "meeting", "Friday", "3pm"]
+        )
+
+        XCTAssertEqual(message.schedulingIntent, "high")
+        XCTAssertEqual(message.intentConfidence, 0.95)
+        XCTAssertTrue(message.hasSchedulingData)
+        XCTAssertEqual(message.schedulingKeywords.count, 4)
+    }
+
+    func testSchedulingIntentMediumConfidence() throws {
+        let message = MessageEntity(
+            id: "msg-med-conf",
+            conversationId: "conv-123",
+            senderId: "user-1",
+            text: "Should we meet next week?",
+            schedulingIntent: "medium",
+            intentConfidence: 0.6,
+            intentAnalyzedAt: Date(),
+            schedulingKeywords: ["meet", "next week"]
+        )
+
+        XCTAssertEqual(message.schedulingIntent, "medium")
+        XCTAssertEqual(message.intentConfidence, 0.6)
+        XCTAssertTrue(message.hasSchedulingData)
+    }
+
+    func testSchedulingIntentNoneClassification() throws {
+        let message = MessageEntity(
+            id: "msg-none",
+            conversationId: "conv-123",
+            senderId: "user-1",
+            text: "The weather is nice today",
+            schedulingIntent: "none",
+            intentConfidence: 0.1,
+            intentAnalyzedAt: Date(),
+            schedulingKeywords: []
+        )
+
+        XCTAssertEqual(message.schedulingIntent, "none")
+        XCTAssertEqual(message.intentConfidence, 0.1)
+        XCTAssertTrue(message.hasSchedulingData)
+        XCTAssertEqual(message.schedulingKeywords, [])
+    }
+
+    func testHasSchedulingDataFalseWhenNoAnalysis() throws {
+        let message = MessageEntity(
+            id: "msg-no-analysis",
+            conversationId: "conv-123",
+            senderId: "user-1",
+            text: "Test message"
+        )
+
+        XCTAssertFalse(message.hasSchedulingData)
+        XCTAssertNil(message.intentAnalyzedAt)
+    }
+
+    func testHasSchedulingDataTrueWhenAnalyzed() throws {
+        let message = MessageEntity(
+            id: "msg-analyzed",
+            conversationId: "conv-123",
+            senderId: "user-1",
+            text: "Test message",
+            schedulingIntent: "none",
+            intentConfidence: 0.1,
+            intentAnalyzedAt: Date()
+        )
+
+        XCTAssertTrue(message.hasSchedulingData)
+        XCTAssertNotNil(message.intentAnalyzedAt)
+    }
+
+    func testSchedulingMetadataWithPriorityMetadata() throws {
+        // Test that both priority and scheduling metadata can coexist
+        let message = MessageEntity(
+            id: "msg-both",
+            conversationId: "conv-123",
+            senderId: "user-1",
+            text: "Urgent: Schedule meeting ASAP",
+            priorityScore: 9,
+            priorityLabel: "urgent",
+            priorityRationale: "Contains urgent keyword",
+            priorityAnalyzedAt: Date(),
+            schedulingIntent: "high",
+            intentConfidence: 0.92,
+            intentAnalyzedAt: Date(),
+            schedulingKeywords: ["schedule", "meeting", "ASAP"]
+        )
+
+        // Verify priority metadata
+        XCTAssertTrue(message.hasPriorityData)
+        XCTAssertEqual(message.priorityScore, 9)
+        XCTAssertEqual(message.priorityLabel, "urgent")
+
+        // Verify scheduling metadata
+        XCTAssertTrue(message.hasSchedulingData)
+        XCTAssertEqual(message.schedulingIntent, "high")
+        XCTAssertEqual(message.intentConfidence, 0.92)
+        XCTAssertEqual(message.schedulingKeywords, ["schedule", "meeting", "ASAP"])
+    }
+
+    func testLargeSchedulingKeywordsArray() throws {
+        let largeKeywords = (1...50).map { "keyword-\($0)" }
+        let message = MessageEntity(
+            id: "msg-large-keywords",
+            conversationId: "conv-123",
+            senderId: "user-1",
+            text: "Test",
+            schedulingKeywords: largeKeywords
+        )
+
+        XCTAssertEqual(message.schedulingKeywords.count, 50)
+        XCTAssertEqual(Set(message.schedulingKeywords), Set(largeKeywords))
+    }
+
+    func testSchedulingKeywordsWithSpecialCharacters() throws {
+        let specialKeywords = ["meet@office", "2:30pm", "next-week", "conference_room"]
+        let message = MessageEntity(
+            id: "msg-special",
+            conversationId: "conv-123",
+            senderId: "user-1",
+            text: "Test",
+            schedulingKeywords: specialKeywords
+        )
+
+        XCTAssertEqual(message.schedulingKeywords, specialKeywords)
+    }
 }
