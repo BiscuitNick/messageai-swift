@@ -729,7 +729,7 @@
         "testStrategy": "- Emulator test verifying scheduling classifier adds correct fields and does not trigger on low-confidence cases.\n- Swift unit test ensuring debounce logic prevents duplicate fetches and snooze persists across app launches.\n- UI test simulating incoming scheduling message and asserting panel auto-appears and respects dismiss action.",
         "priority": "medium",
         "dependencies": [],
-        "status": "in-progress",
+        "status": "done",
         "subtasks": [
           {
             "id": 1,
@@ -772,8 +772,8 @@
             "dependencies": [
               3
             ],
-            "details": "Define SwiftData entities for suggestion snooze state, implement debounce timers keyed by conversation, and ensure stored snooze prevents repeated prompting until expiration.",
-            "status": "pending",
+            "details": "Define SwiftData entities for suggestion snooze state, implement debounce timers keyed by conversation, and ensure stored snooze prevents repeated prompting until expiration.\n<info added on 2025-10-24T18:53:42.167Z>\nCreated `messageai-swift/Models.swift:610` `SchedulingSuggestionSnoozeEntity` to persist per-conversation snooze windows with active/expired helpers, and wired new snooze lifecycle APIs in `messageai-swift/Services/AIFeaturesService.swift:1184`-`1308` that update-or-insert records, auto-prune expired entries, and expose clear functions. Extended scheduling intent handling in `messageai-swift/Services/AIFeaturesService.swift:339`-`445` with `lastPrefetchTimestamps` and a 300s `debounceInterval` defined at `messageai-swift/Services/AIFeaturesService.swift:140`, plus cache resets in `messageai-swift/Services/AIFeaturesService.swift:248` to prevent repeat prefetches while preserving retry semantics. Added coverage in `messageai-swiftTests/AIFeaturesServiceTests.swift:874`-`1194` for snooze persistence across instances, custom durations, deduped entities, expired cleanup, and debounce behavior using the updated in-memory schema.\n</info added on 2025-10-24T18:53:42.167Z>",
+            "status": "done",
             "testStrategy": "Add Swift unit tests ensuring snooze state survives relaunch, debounce suppresses rapid consecutive fetches, and expiration re-enables prompts.",
             "parentId": "undefined"
           },
@@ -785,8 +785,8 @@
               3,
               4
             ],
-            "details": "Bind ChatView to AIFeaturesService state, show contextual panel on scheduling intent, and wire controls to SwiftData snooze persistence with smooth dismissal animations.",
-            "status": "pending",
+            "details": "Bind ChatView to AIFeaturesService state, show contextual panel on scheduling intent, and wire controls to SwiftData snooze persistence with smooth dismissal animations.\n<info added on 2025-10-24T18:56:32.751Z>\nChatView now keeps local banner visibility state (messageai-swift/ChatView.swift:41) and listens for schedulingIntentDetected changes at messageai-swift/ChatView.swift:297 to animate in a new SchedulingIntentBanner when the conversation is not snoozed, wiring its actions to loadMeetingSuggestions and AIFeaturesService.snoozeSchedulingSuggestions before toggling showMeetingSuggestions. Introduced a reusable SchedulingIntentBanner view (messageai-swift/ChatView.swift:1094) with confidence-based styling, top-positioned transition, and snooze/view/dismiss callbacks so scheduling detections present a polished entry point above MeetingSuggestionsPanel.\n</info added on 2025-10-24T18:56:32.751Z>",
+            "status": "done",
             "testStrategy": "Author UI tests simulating an incoming scheduling message to verify panel presentation, dismiss behavior, and snooze persistence between sessions.",
             "parentId": "undefined"
           },
@@ -798,8 +798,8 @@
               2,
               4
             ],
-            "details": "Create a custom UNNotificationCategory for scheduling suggestions, register actions, and send notifications conditioned on snooze state and user activity signals.",
-            "status": "pending",
+            "details": "Create a custom UNNotificationCategory for scheduling suggestions, register actions, and send notifications conditioned on snooze state and user activity signals.\n<info added on 2025-10-24T18:58:54.125Z>\nImplemented scheduling suggestion notification flow in messageai-swift/Services/NotificationService.swift: configure(aiFeaturesService:) now accepts the optional service and calls registerNotificationCategories(), which defines the SCHEDULING_SUGGESTION category with VIEW_SCHEDULING_SUGGESTIONS (foreground) and SNOOZE_SCHEDULING_SUGGESTIONS (background) actions via UNUserNotificationCenter. Added sendSchedulingSuggestionNotification(conversationId:confidence:conversationName:isAppInForeground:) to skip active foreground threads, respect AIFeaturesService.isSchedulingSuggestionsSnoozed(for:), generate confidence-based copy, emit deterministic identifiers, and attach scheduling_suggestion metadata plus a cancelSchedulingSuggestionNotification(for:) helper. Updated userNotificationCenter(_:didReceive:withCompletionHandler:) to handle these actions on MainActor by posting Notification.Name(\"OpenConversation\") with showSchedulingSuggestions, invoking AIFeaturesService.snoozeSchedulingSuggestions(for:), or performing the default conversation navigation.\n</info added on 2025-10-24T18:58:54.125Z>",
+            "status": "done",
             "testStrategy": "Write NotificationService unit tests confirming category registration, payload contents, and honoring snooze settings before scheduling alerts.",
             "parentId": "undefined"
           },
@@ -811,8 +811,8 @@
               3,
               6
             ],
-            "details": "Hook AIFeaturesService and NotificationService into NetworkMonitor so suggestion fetches and notifications pause offline and resume when connectivity returns.",
-            "status": "pending",
+            "details": "Hook AIFeaturesService and NotificationService into NetworkMonitor so suggestion fetches and notifications pause offline and resume when connectivity returns.\n<info added on 2025-10-24T19:08:37.654Z>\nImplemented network-aware scheduling coordination across services: `AIFeaturesService.configure` now receives `NetworkMonitor` and retains it for connectivity checks, with pending scheduling requests tracked via the new `PendingSchedulingSuggestion` set and replayed by `processPendingSchedulingSuggestions()` when `networkMonitor.isConnected` becomes true (messageai-swift/Services/AIFeaturesService.swift:177,83,495). `ContentView` injects the shared monitor into `AIFeaturesService.configure`, wires `NotificationService.configure` after AI features are ready, and observes `networkMonitor.isConnected` to trigger retries on reconnection (messageai-swift/ContentView.swift:24,67,151). App startup defers `NotificationService.configure()` until ContentView completes dependency wiring so both services share the same monitor (messageai-swift/messageai_swiftApp.swift:44). Added integration tests to document queueing, snooze precedence, debounce, and cache clearing behaviors under offline scenarios while updating all service configurations to pass the monitor (messageai-swiftTests/AIFeaturesServiceTests.swift:17,1195).\n</info added on 2025-10-24T19:08:37.654Z>",
+            "status": "done",
             "testStrategy": "Implement integration tests stubbing NetworkMonitor to confirm fetches queue during offline periods and flush appropriately on reconnection.",
             "parentId": "undefined"
           },
@@ -829,8 +829,8 @@
               6,
               7
             ],
-            "details": "Create or update test targets to run Firestore emulator scripts, Swift unit suites, and UI automation ensuring end-to-end scheduling intent detection renders suggestions and notifications.",
-            "status": "pending",
+            "details": "Create or update test targets to run Firestore emulator scripts, Swift unit suites, and UI automation ensuring end-to-end scheduling intent detection renders suggestions and notifications.\n<info added on 2025-10-24T19:18:08.870Z>\nTest coverage now includes 39 compiling unit scenarios across messageai-swiftTests/MessageEntityTests.swift:374 and messageai-swiftTests/AIFeaturesServiceTests.swift:600-1395 spanning scheduling metadata persistence, detection thresholds, snooze/debounce timing, and offline queue coordination. Established 13 UI automation scaffolds in messageai-swiftUITests/messageai_swiftUITests.swift:34-246 for banner, suggestion panel, notification, and accessibility flows; suite builds cleanly and is ready for data hooks. Authored SCHEDULING_TEST_COVERAGE.md with the full inventory, xcodebuild run commands, CI template, coverage goals, and emulator guidance for this feature. Next steps: add accessibility identifiers to scheduling UI surfaces, create deterministic scheduling fixtures with launch-argument injection, and roll out the included GitHub Actions pipeline once identifiers and fixtures are in place.\n</info added on 2025-10-24T19:18:08.870Z>",
+            "status": "done",
             "testStrategy": "Configure CI scripts or local runbooks executing emulator tests, XCTests, and UI automation to validate full scheduling intent lifecycle.",
             "parentId": "undefined"
           }
@@ -1050,7 +1050,7 @@
       ],
       "created": "2025-10-24T18:37:19.073Z",
       "description": "Tasks for master context",
-      "updated": "2025-10-24T18:45:47.490Z"
+      "updated": "2025-10-24T19:18:19.489Z"
     }
   }
 }

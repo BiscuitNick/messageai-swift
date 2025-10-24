@@ -21,6 +21,7 @@ struct ContentView: View {
     @Environment(FirestoreService.self) private var firestoreService
     @Environment(MessagingService.self) private var messagingService
     @Environment(NotificationService.self) private var notificationService
+    @Environment(NetworkMonitor.self) private var networkMonitor
     @Environment(AIFeaturesService.self) private var aiFeaturesService
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
@@ -68,8 +69,10 @@ struct ContentView: View {
                 modelContext: modelContext,
                 authService: authService,
                 messagingService: messagingService,
-                firestoreService: firestoreService
+                firestoreService: firestoreService,
+                networkMonitor: networkMonitor
             )
+            notificationService.configure(aiFeaturesService: aiFeaturesService)
             firestoreService.startUserListener(modelContext: modelContext)
             firestoreService.startBotListener(modelContext: modelContext)
             hasStartedUserListener = true
@@ -142,6 +145,17 @@ struct ContentView: View {
                     authService.sceneDidEnterBackground()
                 default:
                     break
+                }
+            }
+        }
+        .onChange(of: networkMonitor.isConnected) { oldValue, newValue in
+            // When network connectivity returns, process pending scheduling suggestions
+            if !oldValue && newValue {
+                Task { @MainActor in
+                    #if DEBUG
+                    print("[ContentView] Network connectivity restored - processing pending scheduling suggestions")
+                    #endif
+                    await aiFeaturesService.processPendingSchedulingSuggestions()
                 }
             }
         }

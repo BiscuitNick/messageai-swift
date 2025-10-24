@@ -74,6 +74,21 @@ final class AIFeaturesService {
     @ObservationIgnored
     private var firestoreService: FirestoreService?
 
+    @ObservationIgnored
+    private var networkMonitor: NetworkMonitor?
+
+    // MARK: - Offline Queue
+
+    /// Pending scheduling suggestion requests to retry when network returns
+    private struct PendingSchedulingSuggestion: Hashable {
+        let conversationId: String
+        let messageId: String
+        let timestamp: Date
+    }
+
+    @ObservationIgnored
+    private var pendingSchedulingSuggestions: Set<PendingSchedulingSuggestion> = []
+
     // MARK: - Caches
 
     /// Cached summary entry with expiration
@@ -137,6 +152,13 @@ final class AIFeaturesService {
     @ObservationIgnored
     private var prefetchedConversations: Set<String> = []
 
+    /// Track last prefetch timestamp per conversation for debouncing
+    @ObservationIgnored
+    private var lastPrefetchTimestamps: [String: Date] = [:]
+
+    /// Debounce interval in seconds (default: 5 minutes)
+    private let debounceInterval: TimeInterval = 300
+
     // MARK: - Initialization
 
     init() {
@@ -151,16 +173,19 @@ final class AIFeaturesService {
     ///   - authService: Authentication service for user lifecycle
     ///   - messagingService: Messaging service for message mutation observation
     ///   - firestoreService: Firestore service for database operations
+    ///   - networkMonitor: Network monitor for connectivity awareness
     func configure(
         modelContext: ModelContext,
         authService: AuthService,
         messagingService: MessagingService,
-        firestoreService: FirestoreService
+        firestoreService: FirestoreService,
+        networkMonitor: NetworkMonitor
     ) {
         self.modelContext = modelContext
         self.authService = authService
         self.messagingService = messagingService
         self.firestoreService = firestoreService
+        self.networkMonitor = networkMonitor
     }
 
     // MARK: - Generic Callable Helper
@@ -246,6 +271,8 @@ final class AIFeaturesService {
         prefetchedConversations.removeAll()
         schedulingIntentDetected.removeAll()
         schedulingIntentConfidence.removeAll()
+        lastPrefetchTimestamps.removeAll()
+        pendingSchedulingSuggestions.removeAll()
     }
 
     /// Reset service state (called on sign-out)
@@ -329,7 +356,26 @@ final class AIFeaturesService {
     ///   - conversationId: The ID of the conversation
     ///   - messageId: The ID of the message
     private func handleSchedulingIntentDetection(conversationId: String, messageId: String) async {
-        // Don't prefetch if we've already done it for this conversation
+        // Check if suggestions are currently snoozed
+        if isSchedulingSuggestionsSnoozed(for: conversationId) {
+            #if DEBUG
+            print("[AIFeaturesService] Scheduling suggestions snoozed for conversation \(conversationId)")
+            #endif
+            return
+        }
+
+        // Check debounce: don't prefetch if we recently did
+        if let lastPrefetch = lastPrefetchTimestamps[conversationId] {
+            let timeSinceLastPrefetch = Date().timeIntervalSince(lastPrefetch)
+            if timeSinceLastPrefetch < debounceInterval {
+                #if DEBUG
+                print("[AIFeaturesService] Debouncing prefetch for conversation \(conversationId) (last: \(Int(timeSinceLastPrefetch))s ago)")
+                #endif
+                return
+            }
+        }
+
+        // Don't prefetch if we've already done it for this conversation (legacy check)
         guard !prefetchedConversations.contains(conversationId) else {
             return
         }
@@ -386,8 +432,26 @@ final class AIFeaturesService {
             return
         }
 
+        // Check network connectivity before attempting fetch
+        guard let networkMonitor = networkMonitor, networkMonitor.isConnected else {
+            #if DEBUG
+            print("[AIFeaturesService] Network offline - queueing scheduling suggestion for conversation \(conversationId)")
+            #endif
+            // Queue for retry when network returns
+            let pending = PendingSchedulingSuggestion(
+                conversationId: conversationId,
+                messageId: messageId,
+                timestamp: Date()
+            )
+            pendingSchedulingSuggestions.insert(pending)
+            return
+        }
+
         // Mark as prefetched to prevent duplicates
         prefetchedConversations.insert(conversationId)
+
+        // Record timestamp for debouncing
+        lastPrefetchTimestamps[conversationId] = Date()
 
         // Auto-prefetch meeting suggestions (default 60 minute meeting)
         do {
@@ -410,9 +474,55 @@ final class AIFeaturesService {
             #if DEBUG
             print("[AIFeaturesService] Failed to prefetch meeting suggestions: \(error.localizedDescription)")
             #endif
-            // Remove from prefetched set so we can retry later
+            // Remove from prefetched set and timestamp so we can retry later
             prefetchedConversations.remove(conversationId)
+            lastPrefetchTimestamps.removeValue(forKey: conversationId)
+
+            // If error was network-related, queue for retry
+            if !networkMonitor.isConnected {
+                let pending = PendingSchedulingSuggestion(
+                    conversationId: conversationId,
+                    messageId: messageId,
+                    timestamp: Date()
+                )
+                pendingSchedulingSuggestions.insert(pending)
+            }
         }
+    }
+
+    /// Process pending scheduling suggestion requests when network returns
+    /// Should be called when network connectivity is restored
+    func processPendingSchedulingSuggestions() async {
+        guard let networkMonitor = networkMonitor, networkMonitor.isConnected else {
+            #if DEBUG
+            print("[AIFeaturesService] Network still offline - cannot process pending suggestions")
+            #endif
+            return
+        }
+
+        guard !pendingSchedulingSuggestions.isEmpty else {
+            return
+        }
+
+        #if DEBUG
+        print("[AIFeaturesService] Processing \(pendingSchedulingSuggestions.count) pending scheduling suggestions")
+        #endif
+
+        // Process all pending requests
+        let pending = Array(pendingSchedulingSuggestions)
+        pendingSchedulingSuggestions.removeAll()
+
+        for request in pending {
+            // Re-trigger detection for each pending request
+            await handleSchedulingIntentDetection(
+                conversationId: request.conversationId,
+                messageId: request.messageId
+            )
+        }
+
+        #if DEBUG
+        print("[AIFeaturesService] Finished processing pending scheduling suggestions")
+        #endif
     }
 
     // MARK: - Thread Summary Persistence
@@ -1170,6 +1280,115 @@ final class AIFeaturesService {
             print("[AIFeaturesService] Failed to track analytics (non-fatal): \(error.localizedDescription)")
             #endif
             // Analytics failures should not block the user experience
+        }
+    }
+
+    // MARK: - Scheduling Suggestion Snooze Management
+
+    /// Save snooze state for a conversation
+    /// - Parameters:
+    ///   - conversationId: The conversation to snooze
+    ///   - duration: Duration in seconds to snooze (default: 1 hour)
+    /// - Throws: SwiftData persistence errors
+    func snoozeSchedulingSuggestions(for conversationId: String, duration: TimeInterval = 3600) throws {
+        guard let modelContext = modelContext else {
+            throw AIFeaturesError.notConfigured
+        }
+
+        let snoozedUntil = Date().addingTimeInterval(duration)
+
+        // Check if snooze already exists
+        let descriptor = FetchDescriptor<SchedulingSuggestionSnoozeEntity>(
+            predicate: #Predicate { $0.conversationId == conversationId }
+        )
+
+        if let existing = try modelContext.fetch(descriptor).first {
+            // Update existing snooze
+            existing.snoozedUntil = snoozedUntil
+            existing.updatedAt = Date()
+        } else {
+            // Create new snooze
+            let snooze = SchedulingSuggestionSnoozeEntity(
+                conversationId: conversationId,
+                snoozedUntil: snoozedUntil
+            )
+            modelContext.insert(snooze)
+        }
+
+        try modelContext.save()
+
+        #if DEBUG
+        print("[AIFeaturesService] Snoozed scheduling suggestions for conversation \(conversationId) until \(snoozedUntil)")
+        #endif
+    }
+
+    /// Check if scheduling suggestions are snoozed for a conversation
+    /// - Parameter conversationId: The conversation to check
+    /// - Returns: True if currently snoozed, false otherwise
+    func isSchedulingSuggestionsSnoozed(for conversationId: String) -> Bool {
+        guard let modelContext = modelContext else { return false }
+
+        let descriptor = FetchDescriptor<SchedulingSuggestionSnoozeEntity>(
+            predicate: #Predicate { $0.conversationId == conversationId }
+        )
+
+        guard let snooze = try? modelContext.fetch(descriptor).first else {
+            return false
+        }
+
+        if snooze.isExpired {
+            // Clean up expired snooze
+            modelContext.delete(snooze)
+            try? modelContext.save()
+            return false
+        }
+
+        return snooze.isSnoozed
+    }
+
+    /// Clear snooze state for a conversation
+    /// - Parameter conversationId: The conversation to clear snooze for
+    /// - Throws: SwiftData persistence errors
+    func clearSchedulingSuggestionsSnooze(for conversationId: String) throws {
+        guard let modelContext = modelContext else {
+            throw AIFeaturesError.notConfigured
+        }
+
+        let descriptor = FetchDescriptor<SchedulingSuggestionSnoozeEntity>(
+            predicate: #Predicate { $0.conversationId == conversationId }
+        )
+
+        if let existing = try modelContext.fetch(descriptor).first {
+            modelContext.delete(existing)
+            try modelContext.save()
+
+            #if DEBUG
+            print("[AIFeaturesService] Cleared snooze for conversation \(conversationId)")
+            #endif
+        }
+    }
+
+    /// Clear all expired snoozes from local storage
+    /// - Throws: SwiftData persistence errors
+    func clearExpiredSnoozes() throws {
+        guard let modelContext = modelContext else {
+            throw AIFeaturesError.notConfigured
+        }
+
+        let descriptor = FetchDescriptor<SchedulingSuggestionSnoozeEntity>()
+        let allSnoozes = try modelContext.fetch(descriptor)
+
+        var deletedCount = 0
+        for snooze in allSnoozes where snooze.isExpired {
+            modelContext.delete(snooze)
+            deletedCount += 1
+        }
+
+        if deletedCount > 0 {
+            try modelContext.save()
+            #if DEBUG
+            print("[AIFeaturesService] Cleared \(deletedCount) expired snoozes")
+            #endif
         }
     }
 

@@ -38,6 +38,7 @@ struct ChatView: View {
     @State private var hasScrolledToMessage = false
     @State private var showMeetingSuggestions: Bool = false
     @State private var meetingSuggestions: MeetingSuggestionsResponse?
+    @State private var showSchedulingBanner: Bool = false
     @FocusState private var composerFocused: Bool
 
     private var isAIConversation: Bool {
@@ -293,6 +294,14 @@ struct ChatView: View {
                         }
                     }
                 }
+                .onChange(of: aiFeaturesService.schedulingIntentDetected[conversationId]) { _, detected in
+                    // Auto-show banner when scheduling intent is detected
+                    if detected == true && !aiFeaturesService.isSchedulingSuggestionsSnoozed(for: conversationId) {
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            showSchedulingBanner = true
+                        }
+                    }
+                }
                 .task {
                     messagingService.ensureMessageListener(for: conversationId)
                     await messagingService.markConversationAsRead(conversationId)
@@ -309,6 +318,37 @@ struct ChatView: View {
                         scrollToBottom(proxy: proxy)
                     }
                 }
+            }
+
+            // Scheduling Intent Banner
+            if showSchedulingBanner && !aiFeaturesService.isSchedulingSuggestionsSnoozed(for: conversationId) {
+                SchedulingIntentBanner(
+                    confidence: aiFeaturesService.schedulingIntentConfidence[conversationId] ?? 0.0,
+                    onViewSuggestions: {
+                        withAnimation {
+                            showSchedulingBanner = false
+                            showMeetingSuggestions = true
+                            loadMeetingSuggestions(forceRefresh: false)
+                        }
+                    },
+                    onSnooze: {
+                        do {
+                            try aiFeaturesService.snoozeSchedulingSuggestions(for: conversationId)
+                            withAnimation {
+                                showSchedulingBanner = false
+                            }
+                        } catch {
+                            print("[ChatView] Failed to snooze: \(error)")
+                        }
+                    },
+                    onDismiss: {
+                        withAnimation {
+                            showSchedulingBanner = false
+                        }
+                    }
+                )
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .zIndex(1)
             }
 
             // Meeting Suggestions Panel
@@ -1048,5 +1088,113 @@ private struct ComposerView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(Color(.systemBackground))
+    }
+}
+
+// MARK: - Scheduling Intent Banner
+
+struct SchedulingIntentBanner: View {
+    let confidence: Double
+    let onViewSuggestions: () -> Void
+    let onSnooze: () -> Void
+    let onDismiss: () -> Void
+
+    private var confidenceText: String {
+        if confidence >= 0.8 {
+            return "High confidence"
+        } else if confidence >= 0.6 {
+            return "Medium confidence"
+        } else {
+            return "Detected"
+        }
+    }
+
+    private var confidenceColor: Color {
+        if confidence >= 0.8 {
+            return .green
+        } else if confidence >= 0.6 {
+            return .orange
+        } else {
+            return .blue
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                // Icon
+                ZStack {
+                    Circle()
+                        .fill(confidenceColor.opacity(0.15))
+                        .frame(width: 40, height: 40)
+                    Image(systemName: "calendar.badge.clock")
+                        .font(.system(size: 18))
+                        .foregroundStyle(confidenceColor)
+                }
+
+                // Content
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Scheduling Intent Detected")
+                        .font(.subheadline.bold())
+                        .foregroundStyle(.primary)
+
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.caption2)
+                        Text(confidenceText)
+                            .font(.caption)
+                    }
+                    .foregroundStyle(confidenceColor)
+                }
+
+                Spacer()
+
+                // Close button
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(16)
+
+            // Action buttons
+            HStack(spacing: 12) {
+                Button(action: onSnooze) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "clock.fill")
+                            .font(.caption)
+                        Text("Snooze 1h")
+                            .font(.subheadline.weight(.medium))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .background(Color(.systemGray6))
+                    .foregroundStyle(.secondary)
+                    .cornerRadius(8)
+                }
+
+                Button(action: onViewSuggestions) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "sparkles")
+                            .font(.caption)
+                        Text("View Suggestions")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .background(confidenceColor)
+                    .foregroundStyle(.white)
+                    .cornerRadius(8)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 16)
+        }
+        .background(Color(.systemBackground))
+        .cornerRadius(12)
+        .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
     }
 }

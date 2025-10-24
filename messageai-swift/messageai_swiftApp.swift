@@ -45,7 +45,7 @@ struct messageai_swiftApp: App {
         FirebaseApp.configure()
         let firestore = FirestoreService()
         let notification = NotificationService()
-        notification.configure()
+        // Note: NotificationService.configure() is called in ContentView after AIFeaturesService is available
         _firestoreService = State(wrappedValue: firestore)
         _authService = State(wrappedValue: AuthService())
         _messagingService = State(wrappedValue: MessagingService())

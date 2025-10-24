@@ -607,6 +607,37 @@ final class MeetingSuggestionEntity {
     }
 }
 
+@Model
+final class SchedulingSuggestionSnoozeEntity {
+    @Attribute(.unique) var id: String
+    var conversationId: String
+    var snoozedUntil: Date
+    var createdAt: Date
+    var updatedAt: Date
+
+    init(
+        id: String = UUID().uuidString,
+        conversationId: String,
+        snoozedUntil: Date,
+        createdAt: Date = .init(),
+        updatedAt: Date = .init()
+    ) {
+        self.id = id
+        self.conversationId = conversationId
+        self.snoozedUntil = snoozedUntil
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    var isSnoozed: Bool {
+        Date() < snoozedUntil
+    }
+
+    var isExpired: Bool {
+        !isSnoozed
+    }
+}
+
 struct MeetingTimeSuggestionData: Codable, Identifiable {
     var id: String { "\(startTime.ISO8601Format())-\(endTime.ISO8601Format())" }
     let startTime: Date

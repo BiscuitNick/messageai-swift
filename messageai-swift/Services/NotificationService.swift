@@ -22,10 +22,44 @@ final class NotificationService: NSObject {
     var activeConversationId: String?
 
     private var hasRegisteredForRemotes = false
+    private var aiFeaturesService: AIFeaturesService?
 
-    func configure() {
+    func configure(aiFeaturesService: AIFeaturesService? = nil) {
         UNUserNotificationCenter.current().delegate = self
         Messaging.messaging().delegate = self
+        self.aiFeaturesService = aiFeaturesService
+
+        // Register notification categories
+        registerNotificationCategories()
+    }
+
+    private func registerNotificationCategories() {
+        let center = UNUserNotificationCenter.current()
+
+        // Scheduling Suggestion Category
+        let viewSuggestionsAction = UNNotificationAction(
+            identifier: "VIEW_SCHEDULING_SUGGESTIONS",
+            title: "View Suggestions",
+            options: [.foreground]
+        )
+        let snoozeAction = UNNotificationAction(
+            identifier: "SNOOZE_SCHEDULING_SUGGESTIONS",
+            title: "Snooze 1h",
+            options: []
+        )
+        let schedulingSuggestionCategory = UNNotificationCategory(
+            identifier: "SCHEDULING_SUGGESTION",
+            actions: [viewSuggestionsAction, snoozeAction],
+            intentIdentifiers: [],
+            options: []
+        )
+
+        // Register all categories
+        center.setNotificationCategories([schedulingSuggestionCategory])
+
+        #if DEBUG
+        print("[NotificationService] Registered notification categories")
+        #endif
     }
 
     func setActiveConversation(_ conversationId: String?) {
@@ -203,6 +237,83 @@ final class NotificationService: NSObject {
             reminderDate: newReminderDate
         )
     }
+
+    // MARK: - Scheduling Suggestion Notifications
+
+    /// Send a notification prompting user to view scheduling suggestions
+    /// - Parameters:
+    ///   - conversationId: The conversation with scheduling intent
+    ///   - confidence: Detection confidence score
+    ///   - conversationName: Name of the conversation for display
+    ///   - isAppInForeground: Whether app is currently in foreground
+    /// - Throws: Notification scheduling errors
+    func sendSchedulingSuggestionNotification(
+        conversationId: String,
+        confidence: Double,
+        conversationName: String,
+        isAppInForeground: Bool
+    ) async throws {
+        // Don't send if app is in foreground and conversation is active
+        if isAppInForeground, activeConversationId == conversationId {
+            return
+        }
+
+        // Check if suggestions are snoozed
+        if let service = aiFeaturesService, service.isSchedulingSuggestionsSnoozed(for: conversationId) {
+            #if DEBUG
+            print("[NotificationService] Skipping notification - suggestions snoozed for \(conversationId)")
+            #endif
+            return
+        }
+
+        let content = UNMutableNotificationContent()
+        content.title = "Meeting Time Detected"
+
+        let confidenceText: String
+        if confidence >= 0.8 {
+            confidenceText = "High confidence"
+        } else if confidence >= 0.6 {
+            confidenceText = "Likely"
+        } else {
+            confidenceText = "Possible"
+        }
+
+        content.body = "\(confidenceText) scheduling intent in \(conversationName)"
+        content.sound = .default
+        content.categoryIdentifier = "SCHEDULING_SUGGESTION"
+        content.userInfo = [
+            "conversationId": conversationId,
+            "type": "scheduling_suggestion",
+            "confidence": confidence
+        ]
+
+        // Create unique identifier
+        let identifier = "scheduling_suggestion_\(conversationId)"
+
+        // Create request (immediate delivery)
+        let request = UNNotificationRequest(
+            identifier: identifier,
+            content: content,
+            trigger: nil
+        )
+
+        try await UNUserNotificationCenter.current().add(request)
+
+        #if DEBUG
+        print("[NotificationService] Sent scheduling suggestion notification for \(conversationId)")
+        #endif
+    }
+
+    /// Cancel a pending scheduling suggestion notification
+    /// - Parameter conversationId: The conversation whose notification should be cancelled
+    func cancelSchedulingSuggestionNotification(for conversationId: String) {
+        let identifier = "scheduling_suggestion_\(conversationId)"
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [identifier])
+
+        #if DEBUG
+        print("[NotificationService] Cancelled scheduling suggestion notification for \(conversationId)")
+        #endif
+    }
 }
 
 extension NotificationService: UNUserNotificationCenterDelegate {
@@ -219,18 +330,46 @@ extension NotificationService: UNUserNotificationCenterDelegate {
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        // Handle notification tap
         let userInfo = response.notification.request.content.userInfo
-        if let conversationId = userInfo["conversationId"] as? String {
-            // Post notification to navigate to conversation
-            Task { @MainActor in
-                NotificationCenter.default.post(
-                    name: Notification.Name("OpenConversation"),
-                    object: nil,
-                    userInfo: ["conversationId": conversationId]
-                )
+        let conversationId = userInfo["conversationId"] as? String
+
+        Task { @MainActor in
+            // Handle scheduling suggestion actions
+            if response.actionIdentifier == "VIEW_SCHEDULING_SUGGESTIONS" {
+                if let conversationId {
+                    // Post notification to navigate to conversation and open suggestions
+                    NotificationCenter.default.post(
+                        name: Notification.Name("OpenConversation"),
+                        object: nil,
+                        userInfo: [
+                            "conversationId": conversationId,
+                            "showSchedulingSuggestions": true
+                        ]
+                    )
+                }
+            } else if response.actionIdentifier == "SNOOZE_SCHEDULING_SUGGESTIONS" {
+                if let conversationId, let service = self.aiFeaturesService {
+                    do {
+                        try service.snoozeSchedulingSuggestions(for: conversationId)
+                        #if DEBUG
+                        print("[NotificationService] Snoozed scheduling suggestions for \(conversationId)")
+                        #endif
+                    } catch {
+                        print("[NotificationService] Failed to snooze: \(error)")
+                    }
+                }
+            } else if response.actionIdentifier == UNNotificationDefaultActionIdentifier {
+                // Default tap action - navigate to conversation
+                if let conversationId {
+                    NotificationCenter.default.post(
+                        name: Notification.Name("OpenConversation"),
+                        object: nil,
+                        userInfo: ["conversationId": conversationId]
+                    )
+                }
             }
         }
+
         completionHandler()
     }
 }
