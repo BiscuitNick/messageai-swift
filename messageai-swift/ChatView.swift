@@ -411,6 +411,13 @@ struct ChatView: View {
 
         let content = text
 
+        // Capture message data synchronously on MainActor BEFORE the Task
+        // This avoids a deadlock where we try to read from SwiftData while
+        // the Firestore listener is trying to write to it
+        let currentMessages = messages.map { message in
+            (senderId: message.senderId, text: message.text)
+        }
+
         Task {
             isSending = true
             defer { isSending = false }
@@ -426,15 +433,24 @@ struct ChatView: View {
                     isBotTyping = true
 
                     do {
-                        // Pass full conversation history for context
-                        let conversationHistory = messages.map { message in
+                        // Build conversation history from captured data
+                        let conversationHistory = currentMessages.map { msg in
                             FirestoreService.AgentMessage(
-                                role: message.senderId == currentUser.id ? "user" : "assistant",
-                                content: message.text
+                                role: msg.senderId == currentUser.id ? "user" : "assistant",
+                                content: msg.text
                             )
                         }
+
+                        // Add the current message to history
+                        let fullHistory = conversationHistory + [
+                            FirestoreService.AgentMessage(
+                                role: "user",
+                                content: content
+                            )
+                        ]
+
                         try await firestoreService.chatWithAgent(
-                            messages: conversationHistory,
+                            messages: fullHistory,
                             conversationId: conversationId
                         )
                     } catch {
