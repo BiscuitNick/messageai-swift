@@ -31,6 +31,10 @@ struct messageai_swiftApp: App {
             SearchResultEntity.self,
             RecentQueryEntity.self,
             DecisionEntity.self,
+            MeetingSuggestionEntity.self,
+            SchedulingSuggestionSnoozeEntity.self,
+            CoordinationInsightEntity.self,
+            ProactiveAlertEntity.self,
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 

@@ -54,8 +54,67 @@ final class NotificationService: NSObject {
             options: []
         )
 
+        // Coordination Alert Categories
+        let viewDashboardAction = UNNotificationAction(
+            identifier: "VIEW_COORDINATION_DASHBOARD",
+            title: "View Dashboard",
+            options: [.foreground]
+        )
+        let dismissAlertAction = UNNotificationAction(
+            identifier: "DISMISS_COORDINATION_ALERT",
+            title: "Dismiss",
+            options: [.destructive]
+        )
+
+        // Action Item Alert
+        let actionItemCategory = UNNotificationCategory(
+            identifier: "COORDINATION_ACTION_ITEM",
+            actions: [viewDashboardAction, dismissAlertAction],
+            intentIdentifiers: [],
+            options: []
+        )
+
+        // Blocker Alert
+        let blockerCategory = UNNotificationCategory(
+            identifier: "COORDINATION_BLOCKER",
+            actions: [viewDashboardAction, dismissAlertAction],
+            intentIdentifiers: [],
+            options: [.customDismissAction]
+        )
+
+        // Stale Decision Alert
+        let staleDecisionCategory = UNNotificationCategory(
+            identifier: "COORDINATION_STALE_DECISION",
+            actions: [viewDashboardAction, dismissAlertAction],
+            intentIdentifiers: [],
+            options: []
+        )
+
+        // Scheduling Conflict Alert
+        let schedulingConflictCategory = UNNotificationCategory(
+            identifier: "COORDINATION_SCHEDULING_CONFLICT",
+            actions: [viewDashboardAction, dismissAlertAction],
+            intentIdentifiers: [],
+            options: []
+        )
+
+        // Upcoming Deadline Alert
+        let deadlineCategory = UNNotificationCategory(
+            identifier: "COORDINATION_DEADLINE",
+            actions: [viewDashboardAction, dismissAlertAction],
+            intentIdentifiers: [],
+            options: []
+        )
+
         // Register all categories
-        center.setNotificationCategories([schedulingSuggestionCategory])
+        center.setNotificationCategories([
+            schedulingSuggestionCategory,
+            actionItemCategory,
+            blockerCategory,
+            staleDecisionCategory,
+            schedulingConflictCategory,
+            deadlineCategory
+        ])
 
         #if DEBUG
         print("[NotificationService] Registered notification categories")
@@ -314,6 +373,151 @@ final class NotificationService: NSObject {
         print("[NotificationService] Cancelled scheduling suggestion notification for \(conversationId)")
         #endif
     }
+
+    // MARK: - Coordination Alert Notifications
+
+    /// Deduplication tracking for coordination alerts
+    private var sentCoordinationAlerts: Set<String> = []
+
+    /// Send a coordination alert notification
+    /// - Parameters:
+    ///   - alert: The proactive alert entity to notify about
+    ///   - conversationId: The conversation this alert relates to
+    ///   - conversationName: Display name of the conversation
+    ///   - isAppInForeground: Whether app is currently active
+    /// - Throws: Notification delivery errors
+    func sendCoordinationAlertNotification(
+        alert: ProactiveAlertEntity,
+        conversationId: String,
+        conversationName: String?,
+        isAppInForeground: Bool
+    ) async throws {
+        // Deduplication - don't send the same alert twice
+        if sentCoordinationAlerts.contains(alert.id) {
+            #if DEBUG
+            print("[NotificationService] Skipping duplicate coordination alert: \(alert.id)")
+            #endif
+            return
+        }
+
+        // Don't send if app is in foreground and conversation is active
+        if isAppInForeground, activeConversationId == conversationId {
+            return
+        }
+
+        let content = UNMutableNotificationContent()
+        content.title = alert.title
+        content.body = alert.message
+
+        // Select sound based on severity
+        switch alert.severity {
+        case .critical, .high:
+            content.sound = .defaultCritical
+        case .medium, .low:
+            content.sound = .default
+        }
+
+        // Set category based on alert type
+        let categoryIdentifier: String
+        switch alert.alertType {
+        case "action_item":
+            categoryIdentifier = "COORDINATION_ACTION_ITEM"
+        case "blocker":
+            categoryIdentifier = "COORDINATION_BLOCKER"
+        case "stale_decision":
+            categoryIdentifier = "COORDINATION_STALE_DECISION"
+        case "scheduling_conflict":
+            categoryIdentifier = "COORDINATION_SCHEDULING_CONFLICT"
+        case "upcoming_deadline":
+            categoryIdentifier = "COORDINATION_DEADLINE"
+        default:
+            categoryIdentifier = "COORDINATION_ACTION_ITEM"
+        }
+        content.categoryIdentifier = categoryIdentifier
+
+        // Include conversation info in user info
+        content.userInfo = [
+            "conversationId": conversationId,
+            "alertId": alert.id,
+            "alertType": alert.alertType,
+            "type": "coordination_alert",
+            "severity": alert.severity.rawValue,
+            "conversationName": conversationName ?? "Unknown"
+        ]
+
+        // Create unique identifier
+        let identifier = "coordination_alert_\(alert.id)"
+
+        // Create request (immediate delivery)
+        let request = UNNotificationRequest(
+            identifier: identifier,
+            content: content,
+            trigger: nil
+        )
+
+        try await UNUserNotificationCenter.current().add(request)
+
+        // Mark as sent for deduplication
+        sentCoordinationAlerts.insert(alert.id)
+
+        #if DEBUG
+        print("[NotificationService] Sent coordination alert notification: \(alert.alertType) - \(alert.title)")
+        #endif
+    }
+
+    /// Batch send multiple coordination alerts with throttling
+    /// - Parameters:
+    ///   - alerts: Array of alerts to send
+    ///   - conversationMap: Map of conversationId to conversation names
+    ///   - isAppInForeground: Whether app is currently active
+    /// - Throws: Notification delivery errors
+    func sendCoordinationAlerts(
+        _ alerts: [ProactiveAlertEntity],
+        conversationMap: [String: String],
+        isAppInForeground: Bool
+    ) async throws {
+        // Throttle to max 3 alerts per batch to avoid overwhelming user
+        let maxAlertsPerBatch = 3
+
+        // Sort by severity (critical/high first) and take top N
+        let sortedAlerts = alerts.sorted { $0.severity.rawValue > $1.severity.rawValue }
+        let alertsToSend = Array(sortedAlerts.prefix(maxAlertsPerBatch))
+
+        for alert in alertsToSend {
+            let conversationName = conversationMap[alert.conversationId]
+            try await sendCoordinationAlertNotification(
+                alert: alert,
+                conversationId: alert.conversationId,
+                conversationName: conversationName,
+                isAppInForeground: isAppInForeground
+            )
+
+            // Small delay between notifications
+            try await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
+        }
+
+        #if DEBUG
+        print("[NotificationService] Sent \(alertsToSend.count)/\(alerts.count) coordination alerts")
+        #endif
+    }
+
+    /// Clear deduplication tracking (call when alerts are dismissed or read)
+    /// - Parameter alertId: The alert ID to clear from tracking
+    func clearCoordinationAlertTracking(for alertId: String) {
+        sentCoordinationAlerts.remove(alertId)
+    }
+
+    /// Cancel a coordination alert notification
+    /// - Parameter alertId: The alert whose notification should be cancelled
+    func cancelCoordinationAlertNotification(for alertId: String) {
+        let identifier = "coordination_alert_\(alertId)"
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [identifier])
+        sentCoordinationAlerts.remove(alertId)
+
+        #if DEBUG
+        print("[NotificationService] Cancelled coordination alert notification: \(alertId)")
+        #endif
+    }
 }
 
 extension NotificationService: UNUserNotificationCenterDelegate {
@@ -334,8 +538,28 @@ extension NotificationService: UNUserNotificationCenterDelegate {
         let conversationId = userInfo["conversationId"] as? String
 
         Task { @MainActor in
-            // Handle scheduling suggestion actions
-            if response.actionIdentifier == "VIEW_SCHEDULING_SUGGESTIONS" {
+            // Handle coordination alert actions
+            if response.actionIdentifier == "VIEW_COORDINATION_DASHBOARD" {
+                // Navigate to coordination dashboard
+                NotificationCenter.default.post(
+                    name: Notification.Name("OpenCoordinationDashboard"),
+                    object: nil,
+                    userInfo: userInfo
+                )
+            } else if response.actionIdentifier == "DISMISS_COORDINATION_ALERT" {
+                // Dismiss the alert
+                if let alertId = userInfo["alertId"] as? String, let service = self.aiFeaturesService {
+                    do {
+                        try service.dismissAlert(alertId)
+                        self.clearCoordinationAlertTracking(for: alertId)
+                        #if DEBUG
+                        print("[NotificationService] Dismissed coordination alert: \(alertId)")
+                        #endif
+                    } catch {
+                        print("[NotificationService] Failed to dismiss alert: \(error)")
+                    }
+                }
+            } else if response.actionIdentifier == "VIEW_SCHEDULING_SUGGESTIONS" {
                 if let conversationId {
                     // Post notification to navigate to conversation and open suggestions
                     NotificationCenter.default.post(
@@ -359,8 +583,18 @@ extension NotificationService: UNUserNotificationCenterDelegate {
                     }
                 }
             } else if response.actionIdentifier == UNNotificationDefaultActionIdentifier {
-                // Default tap action - navigate to conversation
-                if let conversationId {
+                // Default tap action - check notification type
+                let notificationType = userInfo["type"] as? String
+
+                if notificationType == "coordination_alert" {
+                    // For coordination alerts, open the dashboard
+                    NotificationCenter.default.post(
+                        name: Notification.Name("OpenCoordinationDashboard"),
+                        object: nil,
+                        userInfo: userInfo
+                    )
+                } else if let conversationId {
+                    // For other notifications, navigate to conversation
                     NotificationCenter.default.post(
                         name: Notification.Name("OpenConversation"),
                         object: nil,

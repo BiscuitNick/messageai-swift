@@ -140,6 +140,8 @@ struct ContentView: View {
                 case .active:
                     messagingService.setAppInForeground(true)
                     authService.sceneDidBecomeActive()
+                    // Refresh coordination insights when app becomes active
+                    await aiFeaturesService.refreshCoordinationInsights()
                 case .background:
                     messagingService.setAppInForeground(false)
                     authService.sceneDidEnterBackground()
@@ -149,13 +151,14 @@ struct ContentView: View {
             }
         }
         .onChange(of: networkMonitor.isConnected) { oldValue, newValue in
-            // When network connectivity returns, process pending scheduling suggestions
+            // When network connectivity returns, process pending work and refresh coordination insights
             if !oldValue && newValue {
                 Task { @MainActor in
                     #if DEBUG
-                    print("[ContentView] Network connectivity restored - processing pending scheduling suggestions")
+                    print("[ContentView] Network connectivity restored - processing pending work")
                     #endif
                     await aiFeaturesService.processPendingSchedulingSuggestions()
+                    await aiFeaturesService.refreshCoordinationInsights()
                 }
             }
         }

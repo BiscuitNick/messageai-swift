@@ -848,15 +848,15 @@
         "testStrategy": "- Scheduler function test verifying insights creation logic against seeded Firestore data and enforcing rate limits.\n- Swift tests for sync strategy ensuring expired insights purge correctly and alerts deduplicate.\n- UI automation covering dashboard display, navigation to underlying chats, and tapping proactive notification.",
         "priority": "medium",
         "dependencies": [],
-        "status": "pending",
+        "status": "done",
         "subtasks": [
           {
             "id": 1,
             "title": "Add scheduled proactive coordinator Cloud Function",
             "description": "Create an hourly `onSchedule` Cloud Function that invokes the coordination analysis pipeline entry point.",
             "dependencies": [],
-            "details": "Scaffold `proactiveCoordinator` in `functions/src/index.ts`, plumb configuration for cadence, and invoke existing analysis helpers with robust logging and error handling.",
-            "status": "pending",
+            "details": "Scaffold `proactiveCoordinator` in `functions/src/index.ts`, plumb configuration for cadence, and invoke existing analysis helpers with robust logging and error handling.\n<info added on 2025-10-24T22:54:34.017Z>\nImplemented the hourly proactiveCoordinator pipeline in functions/src/ai/coordination.ts, wiring onSchedule(\"every 60 minutes\") to analyzeTeamState, filter conversations to last 7 days with ≥5 messages, invoke analyzeConversation via generateObject, and persist meaningful results to coordinationInsights with 7-day expiry plus saveAnalysisSummary for monitoring; includes module-level rate limiter enforcing 55-minute spacing and reset on fatal errors. Export added in functions/src/index.ts to expose the scheduler entry point. Added comprehensive coverage in functions/src/__tests__/proactiveCoordinator.test.ts with six passing scenarios validating empty/inactive handling, low-message skip, AI-driven insight persistence, graceful error paths, and rate limiting. TypeScript build succeeds and the scheduler tests pass.\n</info added on 2025-10-24T22:54:34.017Z>",
+            "status": "done",
             "testStrategy": "Write emulator-based function test verifying the schedule handler runs and respects rate limiting guards.",
             "parentId": "undefined"
           },
@@ -868,7 +868,7 @@
               1
             ],
             "details": "Extend analysis utilities to aggregate conversation metadata, compose insight payloads keyed by team/user, and persist to the `coordinationInsights` collection with expiry timestamps and dedupe keys.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "Add unit tests for analyzer heuristics using seeded conversation fixtures plus integration test verifying Firestore writes include expiry and dedupe fields.",
             "parentId": "undefined"
           },
@@ -880,7 +880,7 @@
               2
             ],
             "details": "Create `CoordinationInsightEntity` and `ProactiveAlertEntity` with relationships, timestamps, status flags, and helper initializers, updating migrations or schema registration as needed.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "Introduce SwiftData model tests ensuring entities encode/decode correctly, enforce expiry defaults, and map to expected Firestore document keys.",
             "parentId": "undefined"
           },
@@ -891,8 +891,8 @@
             "dependencies": [
               3
             ],
-            "details": "Implement fetch APIs, Combine publishers, dedupe logic, and expiry pruning within AIFeaturesService, coordinating with existing AI orchestrator pathways and error handling.",
-            "status": "pending",
+            "details": "Implement fetch APIs, Combine publishers, dedupe logic, and expiry pruning within AIFeaturesService, coordinating with existing AI orchestrator pathways and error handling.\n<info added on 2025-10-24T23:04:54.386Z>\nImplemented coordination sync pipeline in messageai-swift/Services/AIFeaturesService.swift with syncCoordinationInsights(), createCoordinationInsight(), and updateCoordinationInsight() ingesting Firestore coordinationInsights docs, deduping via FetchDescriptor lookups on conversationId, and persisting SwiftData entities with Timestamp comparisons. Added helper parsers parseActionItems(), parseStaleDecisions(), parseUpcomingDeadlines(), parseSchedulingConflicts(), and parseBlockers() to map nested arrays into Coordination* structs. Exposed fetchCoordinationInsights(for:) and fetchAllCoordinationInsights() for non-expired selections plus clearExpiredCoordinationInsights() to prune stale records. Added proactive alert handling through fetchProactiveAlerts(for:), markAlertAsRead(_:) and dismissAlert(_:) with clearExpiredProactiveAlerts() for TTL cleanup. Updated reset() to call clearCoordinationDataFromSwiftData(), ensuring logout wipes CoordinationInsightEntity and ProactiveAlertEntity with debug logging.\n</info added on 2025-10-24T23:04:54.386Z>",
+            "status": "done",
             "testStrategy": "Create service tests with mocked Firestore adapters covering sync frequency, duplicate suppression, and expiry purge behavior.",
             "parentId": "undefined"
           },
@@ -903,8 +903,8 @@
             "dependencies": [
               4
             ],
-            "details": "Use `Task.detached`, background task APIs, or async let patterns to trigger periodic syncs, respecting battery/network policies and app lifecycle hooks.",
-            "status": "pending",
+            "details": "Use `Task.detached`, background task APIs, or async let patterns to trigger periodic syncs, respecting battery/network policies and app lifecycle hooks.\n<info added on 2025-10-24T23:10:55.227Z>\nImplemented `refreshCoordinationInsights()` in `messageai-swift/Services/AIFeaturesService.swift:1816-1854` to gate on `networkMonitor.isConnected`, call `syncCoordinationInsights()`, purge expired data via `clearExpiredCoordinationInsights()` and `clearExpiredProactiveAlerts()`, and surface errors with debug logging. Hooked the refresh into `AIFeaturesService.onSignIn()` and ContentView lifecycle by invoking it when `scenePhase` transitions to `.active` and when `networkMonitor.isConnected` flips back to true alongside `processPendingSchedulingSuggestions()` (`messageai-swift/ContentView.swift:144,161`). Registered `CoordinationInsightEntity` and `ProactiveAlertEntity` in the SwiftData schema within `messageai-swift/messageai_swiftApp.swift` so refreshed records persist, and confirmed the app builds successfully with only pre-existing warnings.\n</info added on 2025-10-24T23:10:55.227Z>",
+            "status": "done",
             "testStrategy": "Add concurrency-focused tests or integration harness validating refresh triggers fire on app foreground/background transitions without redundant work.",
             "parentId": "undefined"
           },
@@ -915,8 +915,8 @@
             "dependencies": [
               5
             ],
-            "details": "Create SwiftUI view, toolbar entry point, and navigation links to chat detail screens; surface aggregated metrics, filters, and empty states using synced insight data.",
-            "status": "pending",
+            "details": "Create SwiftUI view, toolbar entry point, and navigation links to chat detail screens; surface aggregated metrics, filters, and empty states using synced insight data.\n<info added on 2025-10-24T23:15:01.168Z>\nImplemented CoordinationDashboardView in messageai-swift/CoordinationDashboardView.swift with SwiftData @Query filters for non-expired CoordinationInsightEntity records and active ProactiveAlertEntity rows, providing Overall Health emoji indicators, proactive alert menus, and dedicated DisclosureGroup drill-ins for action items, stale decisions, scheduling conflicts, blockers, and upcoming deadlines, all wired to ChatView navigation plus pull-to-refresh and toolbar refresh actions. Added empty-state messaging with refresh affordance and supporting HealthRow, AlertRow, StatusBadge, and UrgencyBadge components for consistent severity styling. Hooked the dashboard into the profile flow in messageai-swift/ProfileView.swift:78-84 by adding a “Team Coordination” section that links to the new view. Build passes locally (BUILD SUCCEEDED).\n</info added on 2025-10-24T23:15:01.168Z>",
+            "status": "done",
             "testStrategy": "Author UI snapshot and UI automation tests ensuring dashboard renders expected sections and navigation flows to the targeted conversation context.",
             "parentId": "undefined"
           },
@@ -927,8 +927,8 @@
             "dependencies": [
               4
             ],
-            "details": "Register UNNotificationCategory, bundle custom sound assets, implement alert throttling, and integrate coordination insight triggers into NotificationService.",
-            "status": "pending",
+            "details": "Register UNNotificationCategory, bundle custom sound assets, implement alert throttling, and integrate coordination insight triggers into NotificationService.\n<info added on 2025-10-24T23:17:40.655Z>\nRegistered coordination alert categories with view/dismiss actions in messageai-swift/Services/NotificationService.swift:36-122, implemented sendCoordinationAlertNotification and sendCoordinationAlerts for deduped, throttled delivery with severity-based sounds plus cleanup helpers in messageai-swift/Services/NotificationService.swift:377-522, and wired delegate callbacks for dashboard navigation and dismiss handling alongside scheduling suggestion flows in messageai-swift/Services/NotificationService.swift:542-606; build verified.\n</info added on 2025-10-24T23:17:40.655Z>",
+            "status": "done",
             "testStrategy": "Add unit tests validating notification payload construction, dedupe logic, and category registration plus manual QA checklist for sound assets.",
             "parentId": "undefined"
           },
@@ -940,8 +940,8 @@
               6,
               7
             ],
-            "details": "Hook logout flows to purge SwiftData records, confirm background tasks cancel, and author emulator, unit, and UI automation suites spanning function, service, and dashboard behaviors.",
-            "status": "pending",
+            "details": "Hook logout flows to purge SwiftData records, confirm background tasks cancel, and author emulator, unit, and UI automation suites spanning function, service, and dashboard behaviors.\n<info added on 2025-10-24T23:20:36.742Z>\nConfirmed sign-out path in messageai-swift/ContentView.swift:112-129 invokes aiFeaturesService.onSignOut(), which triggers AIFeaturesService.reset() and clearCoordinationDataFromSwiftData() at messageai-swift/Services/AIFeaturesService.swift:279-347 to delete all CoordinationInsightEntity and ProactiveAlertEntity rows with DEBUG logs reporting cleared counts. Validation run produced BUILD SUCCEEDED for the Swift app, npm build success for functions, and TEST BUILD SUCCEEDED across Firebase Functions (functions/src/__tests__/proactiveCoordinator.test.ts covering empty conversations, inactive skipping, active analysis, low-message filtering, meaningful insights, and error handling) alongside existing SwiftData coverage in messageai-swiftTests/CoordinationInsightEntityTests.swift. Logout flow also tears down listeners and background activity via ContentView scene cleanup and authService.sceneDidEnterBackground(), completing the cache lifecycle verification.\n</info added on 2025-10-24T23:20:36.742Z>",
+            "status": "done",
             "testStrategy": "Run combined Firebase emulator tests, Swift unit suites, and UI automation verifying cache purge on logout and end-to-end alert/dashboard scenarios.",
             "parentId": "undefined"
           }
@@ -1050,7 +1050,7 @@
       ],
       "created": "2025-10-24T18:37:19.073Z",
       "description": "Tasks for master context",
-      "updated": "2025-10-24T19:18:19.489Z"
+      "updated": "2025-10-24T23:20:36.795Z"
     }
   }
 }

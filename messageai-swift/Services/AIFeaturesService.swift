@@ -283,8 +283,9 @@ final class AIFeaturesService {
         searchLoadingState = false
         searchError = nil
 
-        // Clear search results from SwiftData
+        // Clear all cached data from SwiftData
         clearSearchDataFromSwiftData()
+        clearCoordinationDataFromSwiftData()
     }
 
     /// Clear search-related data from SwiftData (search results and recent queries)
@@ -316,11 +317,43 @@ final class AIFeaturesService {
         }
     }
 
+    /// Clear coordination-related data from SwiftData (insights and alerts)
+    private func clearCoordinationDataFromSwiftData() {
+        guard let modelContext = modelContext else { return }
+
+        do {
+            // Delete all CoordinationInsightEntity instances
+            let insightsDescriptor = FetchDescriptor<CoordinationInsightEntity>()
+            let insights = try modelContext.fetch(insightsDescriptor)
+            for insight in insights {
+                modelContext.delete(insight)
+            }
+
+            // Delete all ProactiveAlertEntity instances
+            let alertsDescriptor = FetchDescriptor<ProactiveAlertEntity>()
+            let alerts = try modelContext.fetch(alertsDescriptor)
+            for alert in alerts {
+                modelContext.delete(alert)
+            }
+
+            try modelContext.save()
+
+            #if DEBUG
+            print("[AIFeaturesService] Cleared \(insights.count) coordination insights and \(alerts.count) proactive alerts from SwiftData")
+            #endif
+        } catch {
+            print("[AIFeaturesService] Error clearing coordination data: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Lifecycle Hooks
 
     /// Called when user signs in
     func onSignIn() {
-        // Warm caches or perform initial setup if needed
+        // Refresh coordination insights on sign-in
+        Task { @MainActor [weak self] in
+            await self?.refreshCoordinationInsights()
+        }
     }
 
     /// Called when user signs out
@@ -1436,6 +1469,390 @@ final class AIFeaturesService {
                 #endif
                 self.errorMessage = error.localizedDescription
             }
+        }
+    }
+
+    // MARK: - Coordination Insights Sync
+
+    /// Sync coordination insights from Firestore to local SwiftData storage
+    /// - Throws: Firestore or SwiftData errors
+    func syncCoordinationInsights() async throws {
+        guard let modelContext = modelContext else {
+            throw AIFeaturesError.notConfigured
+        }
+
+        guard let currentUser = Auth.auth().currentUser else {
+            throw AIFeaturesError.unauthorized
+        }
+
+        #if DEBUG
+        print("[AIFeaturesService] Starting coordination insights sync")
+        #endif
+
+        // Fetch insights from Firestore coordinationInsights collection
+        let snapshot = try await firestore.collection("coordinationInsights").getDocuments()
+
+        var syncedCount = 0
+        var dedupedCount = 0
+
+        for document in snapshot.documents {
+            let data = document.data()
+
+            // Extract fields from Firestore document
+            guard let conversationId = data["conversationId"] as? String,
+                  let teamId = data["teamId"] as? String,
+                  let summary = data["summary"] as? String,
+                  let overallHealthStr = data["overallHealth"] as? String,
+                  let generatedAtTimestamp = data["generatedAt"] as? Timestamp,
+                  let expiresAtTimestamp = data["expiresAt"] as? Timestamp else {
+                #if DEBUG
+                print("[AIFeaturesService] Skipping malformed insight document: \(document.documentID)")
+                #endif
+                continue
+            }
+
+            // Check if already exists (dedupe by conversationId)
+            let descriptor = FetchDescriptor<CoordinationInsightEntity>(
+                predicate: #Predicate { $0.conversationId == conversationId }
+            )
+
+            if let existing = try modelContext.fetch(descriptor).first {
+                // Update if newer
+                if generatedAtTimestamp.dateValue() > existing.generatedAt {
+                    updateCoordinationInsight(existing, with: data)
+                    syncedCount += 1
+                } else {
+                    dedupedCount += 1
+                }
+                continue
+            }
+
+            // Create new entity
+            let insight = try createCoordinationInsight(from: data, documentId: document.documentID)
+            modelContext.insert(insight)
+            syncedCount += 1
+        }
+
+        if syncedCount > 0 {
+            try modelContext.save()
+        }
+
+        #if DEBUG
+        print("[AIFeaturesService] Coordination insights sync complete: \(syncedCount) synced, \(dedupedCount) deduplicated")
+        #endif
+    }
+
+    /// Create a CoordinationInsightEntity from Firestore data
+    private func createCoordinationInsight(
+        from data: [String: Any],
+        documentId: String
+    ) throws -> CoordinationInsightEntity {
+        guard let conversationId = data["conversationId"] as? String,
+              let teamId = data["teamId"] as? String,
+              let summary = data["summary"] as? String,
+              let overallHealthStr = data["overallHealth"] as? String,
+              let generatedAtTimestamp = data["generatedAt"] as? Timestamp,
+              let expiresAtTimestamp = data["expiresAt"] as? Timestamp else {
+            throw AIFeaturesError.invalidResponse
+        }
+
+        let overallHealth = CoordinationHealth(rawValue: overallHealthStr) ?? .good
+
+        // Parse nested arrays
+        let actionItems = parseActionItems(from: data["actionItems"])
+        let staleDecisions = parseStaleDecisions(from: data["staleDecisions"])
+        let upcomingDeadlines = parseUpcomingDeadlines(from: data["upcomingDeadlines"])
+        let schedulingConflicts = parseSchedulingConflicts(from: data["schedulingConflicts"])
+        let blockers = parseBlockers(from: data["blockers"])
+
+        return CoordinationInsightEntity(
+            id: documentId,
+            conversationId: conversationId,
+            teamId: teamId,
+            actionItems: actionItems,
+            staleDecisions: staleDecisions,
+            upcomingDeadlines: upcomingDeadlines,
+            schedulingConflicts: schedulingConflicts,
+            blockers: blockers,
+            summary: summary,
+            overallHealth: overallHealth,
+            generatedAt: generatedAtTimestamp.dateValue(),
+            expiresAt: expiresAtTimestamp.dateValue()
+        )
+    }
+
+    /// Update existing CoordinationInsightEntity with new data
+    private func updateCoordinationInsight(_ entity: CoordinationInsightEntity, with data: [String: Any]) {
+        if let summary = data["summary"] as? String {
+            entity.summary = summary
+        }
+        if let overallHealthStr = data["overallHealth"] as? String,
+           let health = CoordinationHealth(rawValue: overallHealthStr) {
+            entity.overallHealth = health
+        }
+        if let generatedAtTimestamp = data["generatedAt"] as? Timestamp {
+            entity.generatedAt = generatedAtTimestamp.dateValue()
+        }
+        if let expiresAtTimestamp = data["expiresAt"] as? Timestamp {
+            entity.expiresAt = expiresAtTimestamp.dateValue()
+        }
+
+        entity.actionItems = parseActionItems(from: data["actionItems"])
+        entity.staleDecisions = parseStaleDecisions(from: data["staleDecisions"])
+        entity.upcomingDeadlines = parseUpcomingDeadlines(from: data["upcomingDeadlines"])
+        entity.schedulingConflicts = parseSchedulingConflicts(from: data["schedulingConflicts"])
+        entity.blockers = parseBlockers(from: data["blockers"])
+        entity.updatedAt = Date()
+    }
+
+    // MARK: - Coordination Insight Parsing Helpers
+
+    private func parseActionItems(from value: Any?) -> [CoordinationActionItem] {
+        guard let array = value as? [[String: Any]] else { return [] }
+        return array.compactMap { dict in
+            guard let description = dict["description"] as? String,
+                  let status = dict["status"] as? String else {
+                return nil
+            }
+            return CoordinationActionItem(
+                description: description,
+                assignee: dict["assignee"] as? String,
+                deadline: dict["deadline"] as? String,
+                status: status
+            )
+        }
+    }
+
+    private func parseStaleDecisions(from value: Any?) -> [StaleDecision] {
+        guard let array = value as? [[String: Any]] else { return [] }
+        return array.compactMap { dict in
+            guard let topic = dict["topic"] as? String,
+                  let lastMentioned = dict["lastMentioned"] as? String,
+                  let reason = dict["reason"] as? String else {
+                return nil
+            }
+            return StaleDecision(topic: topic, lastMentioned: lastMentioned, reason: reason)
+        }
+    }
+
+    private func parseUpcomingDeadlines(from value: Any?) -> [UpcomingDeadline] {
+        guard let array = value as? [[String: Any]] else { return [] }
+        return array.compactMap { dict in
+            guard let description = dict["description"] as? String,
+                  let dueDate = dict["dueDate"] as? String,
+                  let urgency = dict["urgency"] as? String else {
+                return nil
+            }
+            return UpcomingDeadline(description: description, dueDate: dueDate, urgency: urgency)
+        }
+    }
+
+    private func parseSchedulingConflicts(from value: Any?) -> [SchedulingConflict] {
+        guard let array = value as? [[String: Any]] else { return [] }
+        return array.compactMap { dict in
+            guard let description = dict["description"] as? String,
+                  let participants = dict["participants"] as? [String] else {
+                return nil
+            }
+            return SchedulingConflict(description: description, participants: participants)
+        }
+    }
+
+    private func parseBlockers(from value: Any?) -> [Blocker] {
+        guard let array = value as? [[String: Any]] else { return [] }
+        return array.compactMap { dict in
+            guard let description = dict["description"] as? String else {
+                return nil
+            }
+            return Blocker(description: description, blockedBy: dict["blockedBy"] as? String)
+        }
+    }
+
+    /// Fetch coordination insights for a conversation from local SwiftData
+    /// - Parameter conversationId: The conversation to fetch insights for
+    /// - Returns: CoordinationInsightEntity if one exists and is not expired, nil otherwise
+    func fetchCoordinationInsights(for conversationId: String) -> CoordinationInsightEntity? {
+        guard let modelContext = modelContext else { return nil }
+
+        let descriptor = FetchDescriptor<CoordinationInsightEntity>(
+            predicate: #Predicate { $0.conversationId == conversationId },
+            sortBy: [SortDescriptor(\.generatedAt, order: .reverse)]
+        )
+
+        guard let insight = try? modelContext.fetch(descriptor).first else {
+            return nil
+        }
+
+        // Return nil if expired
+        return insight.isExpired ? nil : insight
+    }
+
+    /// Fetch all active coordination insights from local SwiftData
+    /// - Returns: Array of non-expired CoordinationInsightEntity instances
+    func fetchAllCoordinationInsights() -> [CoordinationInsightEntity] {
+        guard let modelContext = modelContext else { return [] }
+
+        let descriptor = FetchDescriptor<CoordinationInsightEntity>(
+            sortBy: [SortDescriptor(\.generatedAt, order: .reverse)]
+        )
+
+        let allInsights = (try? modelContext.fetch(descriptor)) ?? []
+        return allInsights.filter { !$0.isExpired }
+    }
+
+    /// Clear expired coordination insights from local storage
+    /// - Throws: SwiftData persistence errors
+    func clearExpiredCoordinationInsights() throws {
+        guard let modelContext = modelContext else {
+            throw AIFeaturesError.notConfigured
+        }
+
+        let descriptor = FetchDescriptor<CoordinationInsightEntity>()
+        let allInsights = try modelContext.fetch(descriptor)
+
+        var deletedCount = 0
+        for insight in allInsights where insight.isExpired {
+            modelContext.delete(insight)
+            deletedCount += 1
+        }
+
+        if deletedCount > 0 {
+            try modelContext.save()
+            #if DEBUG
+            print("[AIFeaturesService] Cleared \(deletedCount) expired coordination insights")
+            #endif
+        }
+    }
+
+    // MARK: - Proactive Alerts Management
+
+    /// Fetch active proactive alerts from local SwiftData
+    /// - Parameter conversationId: Optional conversation filter
+    /// - Returns: Array of active ProactiveAlertEntity instances
+    func fetchProactiveAlerts(for conversationId: String? = nil) -> [ProactiveAlertEntity] {
+        guard let modelContext = modelContext else { return [] }
+
+        let descriptor: FetchDescriptor<ProactiveAlertEntity>
+        if let conversationId = conversationId {
+            descriptor = FetchDescriptor<ProactiveAlertEntity>(
+                predicate: #Predicate { $0.conversationId == conversationId },
+                sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+            )
+        } else {
+            descriptor = FetchDescriptor<ProactiveAlertEntity>(
+                sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+            )
+        }
+
+        let allAlerts = (try? modelContext.fetch(descriptor)) ?? []
+        return allAlerts.filter { $0.isActive }
+    }
+
+    /// Mark a proactive alert as read
+    /// - Parameter alertId: The alert ID to mark as read
+    /// - Throws: SwiftData persistence errors
+    func markAlertAsRead(_ alertId: String) throws {
+        guard let modelContext = modelContext else {
+            throw AIFeaturesError.notConfigured
+        }
+
+        let descriptor = FetchDescriptor<ProactiveAlertEntity>(
+            predicate: #Predicate { $0.id == alertId }
+        )
+
+        guard let alert = try modelContext.fetch(descriptor).first else {
+            return
+        }
+
+        alert.isRead = true
+        alert.readAt = Date()
+        try modelContext.save()
+    }
+
+    /// Dismiss a proactive alert
+    /// - Parameter alertId: The alert ID to dismiss
+    /// - Throws: SwiftData persistence errors
+    func dismissAlert(_ alertId: String) throws {
+        guard let modelContext = modelContext else {
+            throw AIFeaturesError.notConfigured
+        }
+
+        let descriptor = FetchDescriptor<ProactiveAlertEntity>(
+            predicate: #Predicate { $0.id == alertId }
+        )
+
+        guard let alert = try modelContext.fetch(descriptor).first else {
+            return
+        }
+
+        alert.isDismissed = true
+        alert.dismissedAt = Date()
+        try modelContext.save()
+    }
+
+    /// Clear expired proactive alerts from local storage
+    /// - Throws: SwiftData persistence errors
+    func clearExpiredProactiveAlerts() throws {
+        guard let modelContext = modelContext else {
+            throw AIFeaturesError.notConfigured
+        }
+
+        let descriptor = FetchDescriptor<ProactiveAlertEntity>()
+        let allAlerts = try modelContext.fetch(descriptor)
+
+        var deletedCount = 0
+        for alert in allAlerts where alert.isExpired {
+            modelContext.delete(alert)
+            deletedCount += 1
+        }
+
+        if deletedCount > 0 {
+            try modelContext.save()
+            #if DEBUG
+            print("[AIFeaturesService] Cleared \(deletedCount) expired proactive alerts")
+            #endif
+        }
+    }
+
+    // MARK: - Background Refresh
+
+    /// Refresh coordination insights from Firestore and clean up expired data
+    /// Call this on app foreground or when network connectivity returns
+    func refreshCoordinationInsights() async {
+        guard let networkMonitor = networkMonitor, networkMonitor.isConnected else {
+            #if DEBUG
+            print("[AIFeaturesService] Network offline - skipping coordination insights refresh")
+            #endif
+            return
+        }
+
+        guard authService?.currentUser != nil else {
+            #if DEBUG
+            print("[AIFeaturesService] No user logged in - skipping coordination insights refresh")
+            #endif
+            return
+        }
+
+        #if DEBUG
+        print("[AIFeaturesService] Refreshing coordination insights from Firestore")
+        #endif
+
+        do {
+            // Sync latest insights from Firestore
+            try await syncCoordinationInsights()
+
+            // Clean up expired data
+            try clearExpiredCoordinationInsights()
+            try clearExpiredProactiveAlerts()
+
+            #if DEBUG
+            print("[AIFeaturesService] Coordination insights refresh complete")
+            #endif
+        } catch {
+            #if DEBUG
+            print("[AIFeaturesService] Failed to refresh coordination insights: \(error.localizedDescription)")
+            #endif
+            errorMessage = "Failed to refresh coordination insights: \(error.localizedDescription)"
         }
     }
 }

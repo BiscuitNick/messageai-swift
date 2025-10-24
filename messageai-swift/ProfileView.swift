@@ -75,6 +75,14 @@ struct ProfileView: View {
                     LabeledContent("User ID", value: displayedUser.id)
                 }
 
+                Section("Team Coordination") {
+                    NavigationLink {
+                        CoordinationDashboardView()
+                    } label: {
+                        Label("Coordination Dashboard", systemImage: "chart.bar.doc.horizontal")
+                    }
+                }
+
                 Section {
                     Button(role: .destructive, action: signOut) {
                         Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")

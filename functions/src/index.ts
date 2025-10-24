@@ -6,6 +6,7 @@ if (!admin.apps.length) {
 
 export * from "./ai/agents";
 export * from "./ai/classifications";
+export * from "./ai/coordination";
 export * from "./ai/extractions";
 export * from "./ai/search";
 export * from "./ai/summarizations";
