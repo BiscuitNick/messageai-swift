@@ -40,6 +40,13 @@ MessageAI is a modern messaging application built with Swift and Firebase that i
 - **Thread Summarization** - Generate conversation summaries with key points
 - **Decision Tracking** - Extract and track important decisions
 - **Smart Search** - Semantic search across conversations
+- **Coordination Dashboard** - Proactive insights and alerts for team coordination
+
+#### AI Quality & Resilience
+- **Retry Logic** - Exponential backoff with jitter for transient failures (max 3 attempts)
+- **Smart Caching** - SwiftData persistence with TTL (24h for summaries, 1h for search results)
+- **Telemetry** - Comprehensive metrics tracking (latency, success/failure, retry attempts)
+- **User Feedback** - In-app feedback submission for AI-generated content quality improvement
 
 ### User Experience
 - **SwiftUI** interface with smooth animations
@@ -95,6 +102,82 @@ MessageAI is a modern messaging application built with Swift and Firebase that i
                                       │  OpenAI API    │
                                       │  (GPT-4o-mini) │
                                       └────────────────┘
+```
+
+### AI Resilience & Quality Architecture
+
+MessageAI implements comprehensive quality controls for AI features to ensure reliability and continuous improvement:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                   AI Call with Resilience                   │
+└─────────────────────────────────────────────────────────────┘
+
+User Triggers AI Feature
+       │
+       ▼
+┌──────────────────────────┐
+│   AIFeaturesService      │
+│   callWithRetry()        │
+└──────────┬───────────────┘
+           │
+           ▼
+    ┌──────────────┐
+    │ Check Cache  │──────► Cache Hit? Return Immediately
+    │ (SwiftData)  │        (24h for summaries, 1h for search)
+    └──────┬───────┘
+           │ Cache Miss
+           ▼
+    ┌──────────────────┐
+    │ Start Telemetry  │──► Track: userId, function, startTime
+    │ Tracking         │
+    └──────┬───────────┘
+           │
+           ▼
+    ┌──────────────────┐
+    │ Call Firebase    │
+    │ Function         │
+    └──────┬───────────┘
+           │
+      ┌────┴────┐
+      │         │
+   Success    Failure
+      │         │
+      │         ▼
+      │    ┌────────────────┐
+      │    │ Is Retryable?  │──No──► Log Failure Telemetry
+      │    │ (Network/500)  │        Throw Error
+      │    └────┬───────────┘
+      │         │ Yes
+      │         ▼
+      │    ┌────────────────┐
+      │    │ Exponential    │
+      │    │ Backoff + Jitter│
+      │    │ (0.5s → 8s max)│
+      │    └────┬───────────┘
+      │         │
+      │         └──────► Retry (Max 3 attempts)
+      │
+      ▼
+┌─────────────────┐
+│ Log Success     │──► Firestore: ai_telemetry/
+│ Telemetry       │    - durationMs, attemptCount, success
+└─────┬───────────┘
+      │
+      ▼
+┌─────────────────┐
+│ Cache Result    │──► SwiftData with TTL expiration
+│ (if applicable) │
+└─────┬───────────┘
+      │
+      ▼
+   Return to User
+      │
+      ▼
+┌─────────────────┐
+│ User Can Submit │──► Firestore: ai_feedback/
+│ Feedback        │    - rating (1-5), correction, comment
+└─────────────────┘
 ```
 
 ### Data Flow Architecture
@@ -235,6 +318,32 @@ firestore/
 │               ├── participantIds: array
 │               ├── decidedAt: timestamp
 │               └── confidenceScore: number
+│
+├── ai_telemetry/
+│   └── {eventId}
+│       ├── userId: string
+│       ├── functionName: string
+│       ├── startTime: timestamp
+│       ├── endTime: timestamp
+│       ├── durationMs: number
+│       ├── success: boolean
+│       ├── attemptCount: number
+│       ├── errorType: string (optional)
+│       ├── errorMessage: string (optional)
+│       ├── cacheHit: boolean
+│       └── timestamp: timestamp
+│
+└── ai_feedback/
+    └── {feedbackId}
+        ├── userId: string
+        ├── conversationId: string
+        ├── featureType: string (summary, action_items, etc.)
+        ├── originalContent: string
+        ├── userCorrection: string (optional)
+        ├── rating: number (1-5 stars)
+        ├── comment: string (optional)
+        ├── metadata: map (optional)
+        └── timestamp: timestamp
 ```
 
 ---
@@ -440,23 +549,27 @@ open messageai-swift.xcodeproj
 ```
 messageai-swift/
 ├── App/
-│   └── messageai_swiftApp.swift    # App entry point
+│   └── messageai_swiftApp.swift        # App entry point
 ├── Models/
-│   ├── Models.swift                # SwiftData entities
-│   └── AIModels.swift              # AI response models
+│   ├── Models.swift                    # SwiftData entities with TTL support
+│   └── AIModels.swift                  # AI response models
 ├── Views/
-│   ├── AuthenticationView.swift   # Login/signup
-│   ├── ConversationsListView.swift # Conversation list
-│   ├── ChatView.swift              # Chat interface
-│   ├── ActionItemsTabView.swift   # Action items UI
-│   └── DecisionsTabView.swift     # Decisions UI
+│   ├── AuthenticationView.swift       # Login/signup
+│   ├── ConversationsListView.swift    # Conversation list
+│   ├── ChatView.swift                  # Chat interface
+│   ├── ActionItemsTabView.swift       # Action items UI
+│   ├── DecisionsTabView.swift         # Decisions UI
+│   ├── CoordinationDashboardView.swift # Team coordination insights
+│   ├── ThreadSummaryCard.swift        # Summary display with feedback
+│   └── AIFeedbackSheet.swift          # AI feedback submission UI
 ├── Services/
-│   ├── AuthService.swift           # Authentication logic
-│   ├── MessagingService.swift      # Messaging logic
-│   ├── FirestoreService.swift      # Database operations
-│   ├── AIFeaturesService.swift     # AI features client
-│   └── NotificationService.swift   # Local notifications
-├── GoogleService-Info.plist        # Firebase config
+│   ├── AuthService.swift               # Authentication logic
+│   ├── MessagingService.swift          # Messaging logic
+│   ├── FirestoreService.swift          # Database operations
+│   ├── AIFeaturesService.swift         # AI features with retry, caching, telemetry
+│   ├── NotificationService.swift       # Local notifications
+│   └── NetworkMonitor.swift            # Network connectivity monitoring
+├── GoogleService-Info.plist            # Firebase config
 └── Info.plist
 ```
 
@@ -615,6 +728,50 @@ firebase functions:log --follow
 - View real-time updates
 - Check security rules
 
+### Monitoring AI Quality
+
+**Telemetry Dashboard:**
+
+View AI performance metrics in Firestore Console under `ai_telemetry` collection:
+- **Success Rate**: Count of successful vs failed calls
+- **Latency**: Average `durationMs` per function
+- **Retry Patterns**: Distribution of `attemptCount` values
+- **Error Types**: Group by `errorType` and `errorMessage`
+
+**User Feedback Analysis:**
+
+Review user feedback in Firestore Console under `ai_feedback` collection:
+- **Ratings**: Average rating per `featureType`
+- **Corrections**: Review `userCorrection` field for accuracy issues
+- **Comments**: Read user comments for improvement suggestions
+
+**Cache Performance:**
+
+Monitor cache hit rates in DEBUG logs:
+```
+[AIFeaturesService] Returning in-memory cached search results
+[AIFeaturesService] Returning local search results (12 results)
+[AIFeaturesService] Summary for conv-123 expired, returning nil
+```
+
+**Example Firestore Queries:**
+
+```javascript
+// Get failed AI calls in last 24 hours
+db.collection('ai_telemetry')
+  .where('success', '==', false)
+  .where('timestamp', '>', yesterday)
+  .orderBy('timestamp', 'desc')
+  .get()
+
+// Get low-rated summaries for review
+db.collection('ai_feedback')
+  .where('featureType', '==', 'summary')
+  .where('rating', '<=', 2)
+  .orderBy('timestamp', 'desc')
+  .get()
+```
+
 ---
 
 ## 🧪 Testing
@@ -658,6 +815,7 @@ npm test
 
 ### Manual Testing Checklist
 
+**Core Features:**
 - [ ] User registration and login
 - [ ] Create direct conversation
 - [ ] Create group conversation
@@ -670,6 +828,15 @@ npm test
 - [ ] Generate thread summary
 - [ ] Track decisions
 - [ ] Search conversations
+
+**AI Quality Features:**
+- [ ] Verify retry on network failure (airplane mode test)
+- [ ] Check cache hit for repeated summary requests
+- [ ] Confirm telemetry logged in Firestore `ai_telemetry`
+- [ ] Submit AI feedback via thumbs-up button
+- [ ] Verify feedback saved in Firestore `ai_feedback`
+- [ ] Test cache expiration (summaries expire after 24h)
+- [ ] Monitor DEBUG logs for telemetry output
 
 ---
 

@@ -220,56 +220,71 @@ private struct DecisionRow: View {
     @State private var showingReminderPicker = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // Decision text
-            Text(decision.decisionText)
-                .font(.body.weight(.medium))
-                .foregroundStyle(.primary)
-
-            // Context summary
-            if !decision.contextSummary.isEmpty {
-                Text(decision.contextSummary)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(3)
+        HStack(alignment: .top, spacing: 12) {
+            // Status checkbox button (inline, like action items)
+            Button {
+                toggleStatus()
+            } label: {
+                Image(systemName: decision.followUpStatus == .completed ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(decision.followUpStatus.color)
             }
+            .buttonStyle(.plain)
 
-            // Metadata row
-            HStack(spacing: 12) {
-                // Decided at
-                Label {
-                    Text(decision.decidedAt, style: .date)
-                } icon: {
-                    Image(systemName: "calendar")
+            VStack(alignment: .leading, spacing: 8) {
+                // Decision text
+                Text(decision.decisionText)
+                    .font(.body.weight(.medium))
+                    .strikethrough(decision.followUpStatus == .completed)
+                    .foregroundStyle(decision.followUpStatus == .completed ? .secondary : .primary)
+
+                // Context summary
+                if !decision.contextSummary.isEmpty {
+                    Text(decision.contextSummary)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
 
-                // Reminder indicator
-                if let reminderDate = decision.reminderDate {
+                // Metadata row
+                HStack(spacing: 12) {
+                    // Decided at
                     Label {
-                        Text(reminderDate, style: .date)
+                        Text(decision.decidedAt, style: .date)
                     } icon: {
-                        Image(systemName: "bell.fill")
+                        Image(systemName: "calendar")
                     }
                     .font(.caption)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(.secondary)
+
+                    // Reminder indicator
+                    if let reminderDate = decision.reminderDate {
+                        Label {
+                            Text(reminderDate, style: .date)
+                        } icon: {
+                            Image(systemName: "bell.fill")
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    }
+
+                    // Confidence score
+                    Label {
+                        Text("\(Int(decision.confidenceScore * 100))%")
+                    } icon: {
+                        Image(systemName: "chart.bar.fill")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                    Spacer()
+
+                    // Status badge
+                    statusBadge
                 }
-
-                // Confidence score
-                Label {
-                    Text("\(Int(decision.confidenceScore * 100))%")
-                } icon: {
-                    Image(systemName: "chart.bar.fill")
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-                Spacer()
-
-                // Status badge
-                statusBadge
             }
+
+            Spacer()
         }
         .contentShape(Rectangle())
         .contextMenu {
@@ -279,14 +294,32 @@ private struct DecisionRow: View {
                 Label("Edit", systemImage: "pencil")
             }
 
-            Button {
-                toggleStatus()
+            Divider()
+
+            // Status options
+            Menu {
+                Button {
+                    setStatus(.pending)
+                } label: {
+                    Label("Pending", systemImage: decision.followUpStatus == .pending ? "checkmark" : "circle")
+                }
+
+                Button {
+                    setStatus(.completed)
+                } label: {
+                    Label("Completed", systemImage: decision.followUpStatus == .completed ? "checkmark" : "checkmark.circle")
+                }
+
+                Button {
+                    setStatus(.cancelled)
+                } label: {
+                    Label("Cancelled", systemImage: decision.followUpStatus == .cancelled ? "checkmark" : "xmark.circle")
+                }
             } label: {
-                Label(
-                    decision.followUpStatus == .completed ? "Mark Pending" : "Mark Completed",
-                    systemImage: decision.followUpStatus == .completed ? "circle" : "checkmark.circle"
-                )
+                Label("Change Status", systemImage: "arrow.triangle.2.circlepath")
             }
+
+            Divider()
 
             Button {
                 showingReminderPicker = true
@@ -304,6 +337,8 @@ private struct DecisionRow: View {
                     Label("Remove Reminder", systemImage: "bell.slash")
                 }
             }
+
+            Divider()
 
             Button(role: .destructive) {
                 deleteDecision()
@@ -395,10 +430,15 @@ private struct DecisionRow: View {
         }
     }
 
+    /// Toggle status between pending and completed (for inline checkbox)
     private func toggleStatus() {
         // Toggle between pending and completed
         let newStatus: DecisionFollowUpStatus = decision.followUpStatus == .completed ? .pending : .completed
+        setStatus(newStatus)
+    }
 
+    /// Set decision status to a specific value
+    private func setStatus(_ newStatus: DecisionFollowUpStatus) {
         // Cancel reminder if marking as completed or cancelled
         if newStatus == .completed || newStatus == .cancelled {
             if decision.reminderDate != nil {

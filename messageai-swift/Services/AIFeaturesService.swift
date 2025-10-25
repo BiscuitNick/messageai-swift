@@ -2257,9 +2257,29 @@ final class AIFeaturesService {
 
     // MARK: - Background Refresh
 
+    /// Trigger coordination analysis via Cloud Function
+    /// This manually runs the coordination analysis that normally runs every 60 minutes
+    /// - Returns: Analysis result with counts of insights generated
+    /// - Throws: Firebase function call errors
+    private func triggerCoordinationAnalysis() async throws -> CoordinationAnalysisResult {
+        #if DEBUG
+        print("[AIFeaturesService] Triggering coordination analysis via Cloud Function")
+        #endif
+
+        let response: CoordinationAnalysisResult = try await call("triggerCoordinationAnalysis")
+
+        #if DEBUG
+        print("[AIFeaturesService] Coordination analysis complete: \(response.conversationsAnalyzed) conversations, \(response.insightsGenerated) insights")
+        #endif
+
+        return response
+    }
+
     /// Refresh coordination insights from Firestore and clean up expired data
+    /// When forceAnalysis is true, triggers Cloud Function to regenerate insights
     /// Call this on app foreground or when network connectivity returns
-    func refreshCoordinationInsights() async {
+    /// - Parameter forceAnalysis: If true, triggers new analysis via Cloud Function before syncing
+    func refreshCoordinationInsights(forceAnalysis: Bool = false) async {
         guard let networkMonitor = networkMonitor, networkMonitor.isConnected else {
             #if DEBUG
             print("[AIFeaturesService] Network offline - skipping coordination insights refresh")
@@ -2275,11 +2295,19 @@ final class AIFeaturesService {
         }
 
         #if DEBUG
-        print("[AIFeaturesService] Refreshing coordination insights from Firestore")
+        print("[AIFeaturesService] Refreshing coordination insights from Firestore (forceAnalysis: \(forceAnalysis))")
         #endif
 
         do {
-            // Sync latest insights from Firestore
+            // If forceAnalysis, trigger new analysis via Cloud Function first
+            if forceAnalysis {
+                let result = try await triggerCoordinationAnalysis()
+                #if DEBUG
+                print("[AIFeaturesService] Triggered analysis: \(result.insightsGenerated) insights generated")
+                #endif
+            }
+
+            // Sync latest insights from Firestore (includes newly generated ones)
             try await syncCoordinationInsights()
 
             // Clean up expired data
@@ -2295,6 +2323,25 @@ final class AIFeaturesService {
             #endif
             errorMessage = "Failed to refresh coordination insights: \(error.localizedDescription)"
         }
+    }
+}
+
+// MARK: - Response Models
+
+/// Response from triggerCoordinationAnalysis Cloud Function
+struct CoordinationAnalysisResult: Codable {
+    let success: Bool
+    let conversationsAnalyzed: Int
+    let insightsGenerated: Int
+    let errors: Int
+    let timestamp: String
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case conversationsAnalyzed = "conversations_analyzed"
+        case insightsGenerated = "insights_generated"
+        case errors
+        case timestamp
     }
 }
 

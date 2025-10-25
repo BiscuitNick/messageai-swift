@@ -13,23 +13,27 @@ struct CoordinationDashboardView: View {
     @Environment(\.modelContext) private var modelContext
 
     @Query(
-        filter: #Predicate<CoordinationInsightEntity> { insight in
-            !insight.isExpired
-        },
         sort: [SortDescriptor(\CoordinationInsightEntity.generatedAt, order: .reverse)]
     )
-    private var insights: [CoordinationInsightEntity]
+    private var allInsights: [CoordinationInsightEntity]
+
+    // Filter out expired insights (computed property can't be used in @Query predicate)
+    private var insights: [CoordinationInsightEntity] {
+        allInsights.filter { !$0.isExpired }
+    }
 
     @Query(
-        filter: #Predicate<ProactiveAlertEntity> { alert in
-            alert.isActive
-        },
         sort: [
             SortDescriptor(\ProactiveAlertEntity.severityRawValue, order: .reverse),
             SortDescriptor(\ProactiveAlertEntity.createdAt, order: .reverse)
         ]
     )
-    private var alerts: [ProactiveAlertEntity]
+    private var allAlerts: [ProactiveAlertEntity]
+
+    // Filter to only active alerts (computed property can't be used in @Query predicate)
+    private var alerts: [ProactiveAlertEntity] {
+        allAlerts.filter { $0.isActive }
+    }
 
     @Query private var conversations: [ConversationEntity]
 
@@ -477,7 +481,8 @@ struct CoordinationDashboardView: View {
     private func refreshInsights() {
         isRefreshing = true
         Task {
-            await aiFeaturesService.refreshCoordinationInsights()
+            // Force new analysis when user manually taps refresh
+            await aiFeaturesService.refreshCoordinationInsights(forceAnalysis: true)
             await MainActor.run {
                 isRefreshing = false
             }
