@@ -257,7 +257,7 @@ enum TimeOfDay: String, Codable, CaseIterable, Sendable {
 
 struct MeetingSuggestionsResponse: Codable {
     let suggestions: [MeetingTimeSuggestion]
-    let conversationId: String
+    let conversationId: String?  // Optional since function may not return it
     let durationMinutes: Int
     let participantCount: Int
     let generatedAt: Date

@@ -18,11 +18,11 @@ struct ContentView: View {
     }
 
     @Environment(AuthService.self) private var authService
-    @Environment(FirestoreService.self) private var firestoreService
-    @Environment(MessagingService.self) private var messagingService
+    @Environment(FirestoreCoordinator.self) private var firestoreCoordinator
+    @Environment(MessagingCoordinator.self) private var messagingCoordinator
     @Environment(NotificationService.self) private var notificationService
     @Environment(NetworkMonitor.self) private var networkMonitor
-    @Environment(AIFeaturesService.self) private var aiFeaturesService
+    @Environment(AIFeaturesCoordinator.self) private var aiCoordinator
     @Environment(TypingStatusService.self) private var typingStatusService
     @Environment(NetworkSimulator.self) private var networkSimulator
     @Environment(\.modelContext) private var modelContext
@@ -66,34 +66,34 @@ struct ContentView: View {
         }
         .task {
             guard !hasConfiguredContext else { return }
-            authService.configure(modelContext: modelContext, firestoreService: firestoreService)
-            aiFeaturesService.configure(
+            authService.configure(modelContext: modelContext, firestoreCoordinator: firestoreCoordinator)
+            aiCoordinator.configure(
                 modelContext: modelContext,
                 authService: authService,
-                messagingService: messagingService,
-                firestoreService: firestoreService,
+                messagingService: messagingCoordinator,
+                firestoreCoordinator: firestoreCoordinator,
                 networkMonitor: networkMonitor
             )
-            notificationService.configure(aiFeaturesService: aiFeaturesService)
-            firestoreService.startUserListener(modelContext: modelContext)
-            firestoreService.startBotListener(modelContext: modelContext)
+            notificationService.configure(aiFeaturesService: aiCoordinator)
+            firestoreCoordinator.startUserListener(modelContext: modelContext)
+            firestoreCoordinator.startBotListener(modelContext: modelContext)
             hasStartedUserListener = true
             hasStartedBotListener = true
             await notificationService.requestAuthorization()
             await notificationService.registerForRemoteNotifications()
             // Ensure bot exists in Firestore
             do {
-                try await firestoreService.ensureBotExists()
+                try await firestoreCoordinator.ensureBotExists()
                 print("✅ Bot initialization complete")
             } catch {
                 print("❌ Failed to ensure bot exists: \(error.localizedDescription)")
             }
             if let userId = authService.currentUser?.id {
-                messagingService.configure(modelContext: modelContext, currentUserId: userId, notificationService: notificationService, networkSimulator: networkSimulator)
+                messagingCoordinator.configure(modelContext: modelContext, currentUserId: userId, notificationService: notificationService, networkSimulator: networkSimulator)
                 typingStatusService.configure(currentUserId: userId)
                 // Wire AI Features message observer
-                messagingService.onMessageMutation = { [weak aiFeaturesService] conversationId, messageId in
-                    aiFeaturesService?.onMessageMutation(conversationId: conversationId, messageId: messageId)
+                messagingCoordinator.onMessageMutation = { [weak aiCoordinator] conversationId, messageId in
+                    aiCoordinator?.onMessageMutation(conversationId: conversationId, messageId: messageId)
                 }
             }
             await authService.markCurrentUserOnline()
@@ -104,35 +104,35 @@ struct ContentView: View {
             Task { @MainActor in
                 guard let newId else {
                     if hasStartedUserListener {
-                        firestoreService.stopUserListener()
+                        firestoreCoordinator.stopUserListener()
                         hasStartedUserListener = false
                     }
                     if hasStartedBotListener {
-                        firestoreService.stopBotListener()
+                        firestoreCoordinator.stopBotListener()
                         hasStartedBotListener = false
                     }
-                    messagingService.reset()
-                    aiFeaturesService.onSignOut()
+                    messagingCoordinator.reset()
+                    aiCoordinator.onSignOut()
                     authService.sceneDidEnterBackground()
                     selectedTab = .chats
                     return
                 }
                 if !hasStartedUserListener {
-                    firestoreService.startUserListener(modelContext: modelContext)
+                    firestoreCoordinator.startUserListener(modelContext: modelContext)
                     hasStartedUserListener = true
                 }
                 if !hasStartedBotListener {
-                    firestoreService.startBotListener(modelContext: modelContext)
+                    firestoreCoordinator.startBotListener(modelContext: modelContext)
                     hasStartedBotListener = true
                 }
                 await notificationService.registerForRemoteNotifications()
-                messagingService.configure(modelContext: modelContext, currentUserId: newId, notificationService: notificationService, networkSimulator: networkSimulator)
+                messagingCoordinator.configure(modelContext: modelContext, currentUserId: newId, notificationService: notificationService, networkSimulator: networkSimulator)
                 typingStatusService.configure(currentUserId: newId)
                 // Wire AI Features message observer
-                messagingService.onMessageMutation = { [weak aiFeaturesService] conversationId, messageId in
-                    aiFeaturesService?.onMessageMutation(conversationId: conversationId, messageId: messageId)
+                messagingCoordinator.onMessageMutation = { [weak aiCoordinator] conversationId, messageId in
+                    aiCoordinator?.onMessageMutation(conversationId: conversationId, messageId: messageId)
                 }
-                aiFeaturesService.onSignIn()
+                aiCoordinator.onSignIn()
                 await authService.markCurrentUserOnline()
                 authService.sceneDidBecomeActive()
                 selectedTab = .chats
@@ -142,12 +142,12 @@ struct ContentView: View {
             Task {
                 switch newPhase {
                 case .active:
-                    messagingService.setAppInForeground(true)
+                    messagingCoordinator.setAppInForeground(true)
                     authService.sceneDidBecomeActive()
                     // Refresh coordination insights when app becomes active
-                    await aiFeaturesService.refreshCoordinationInsights()
+                    await aiCoordinator.refreshCoordinationInsights()
                 case .background:
-                    messagingService.setAppInForeground(false)
+                    messagingCoordinator.setAppInForeground(false)
                     authService.sceneDidEnterBackground()
                 default:
                     break
@@ -161,8 +161,8 @@ struct ContentView: View {
                     #if DEBUG
                     print("[ContentView] Network connectivity restored - processing pending work")
                     #endif
-                    await aiFeaturesService.processPendingSchedulingSuggestions()
-                    await aiFeaturesService.refreshCoordinationInsights()
+                    await aiCoordinator.processPendingSchedulingSuggestions()
+                    await aiCoordinator.refreshCoordinationInsights()
                 }
             }
         }

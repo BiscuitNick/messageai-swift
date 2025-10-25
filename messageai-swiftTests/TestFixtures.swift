@@ -138,7 +138,7 @@ extension MessageEntity {
             senderId: "user-1",
             text: "Hello, sending...",
             timestamp: Date(),
-            deliveryStatus: .sending,
+            deliveryState: .pending,
             updatedAt: Date()
         )
     }
@@ -150,7 +150,7 @@ extension MessageEntity {
             senderId: "user-1",
             text: "This message was sent",
             timestamp: Date(),
-            deliveryStatus: .sent,
+            deliveryState: .sent,
             updatedAt: Date()
         )
     }
@@ -162,7 +162,7 @@ extension MessageEntity {
             senderId: "user-2",
             text: "This message was delivered",
             timestamp: Date().addingTimeInterval(-60),
-            deliveryStatus: .delivered,
+            deliveryState: .delivered,
             updatedAt: Date()
         )
     }
@@ -174,7 +174,7 @@ extension MessageEntity {
             senderId: "user-1",
             text: "This message was read",
             timestamp: Date().addingTimeInterval(-120),
-            deliveryStatus: .read,
+            deliveryState: .read,
             updatedAt: Date()
         )
     }
@@ -186,7 +186,7 @@ extension MessageEntity {
             senderId: "user-1",
             text: "Group message read by multiple users",
             timestamp: Date().addingTimeInterval(-300),
-            deliveryStatus: .read,
+            deliveryState: .read,
             updatedAt: Date()
         )
     }

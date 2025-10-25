@@ -11,7 +11,7 @@ import SwiftData
 struct ActionItemsTabView: View {
     let conversationId: String
 
-    @Environment(AIFeaturesService.self) private var aiFeaturesService
+    @Environment(AIFeaturesCoordinator.self) private var aiCoordinator
     @Environment(\.modelContext) private var modelContext
 
     @Query private var actionItems: [ActionItemEntity]
@@ -68,9 +68,9 @@ struct ActionItemsTabView: View {
             }
 
             // Content
-            if aiFeaturesService.actionItemsLoadingStates[conversationId] == true || isExtracting {
+            if aiCoordinator.actionItemsService.state.isLoading(conversationId) || isExtracting {
                 loadingView
-            } else if let error = aiFeaturesService.actionItemsErrors[conversationId] {
+            } else if let error = aiCoordinator.actionItemsService.state.error(for: conversationId) {
                 errorView(error)
             } else if actionItems.isEmpty {
                 emptyView
@@ -220,7 +220,7 @@ struct ActionItemsTabView: View {
         isExtracting = true
         Task {
             do {
-                _ = try await aiFeaturesService.extractActionItems(
+                _ = try await aiCoordinator.actionItemsService.extractActionItems(
                     conversationId: conversationId,
                     forceRefresh: true
                 )
@@ -238,7 +238,7 @@ private struct ActionItemRow: View {
     let onEdit: () -> Void
 
     @Environment(\.modelContext) private var modelContext
-    @Environment(FirestoreService.self) private var firestoreService
+    @Environment(FirestoreCoordinator.self) private var firestoreCoordinator
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -341,7 +341,7 @@ private struct ActionItemRow: View {
         // Sync back to Firestore
         Task {
             do {
-                try await firestoreService.updateActionItem(
+                try await firestoreCoordinator.updateActionItem(
                     conversationId: conversationId,
                     actionItemId: item.id,
                     task: item.task,
@@ -369,7 +369,7 @@ private struct ActionItemRow: View {
         // Delete from Firestore
         Task {
             do {
-                try await firestoreService.deleteActionItem(
+                try await firestoreCoordinator.deleteActionItem(
                     conversationId: conversationId,
                     actionItemId: item.id
                 )

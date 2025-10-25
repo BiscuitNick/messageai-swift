@@ -22,12 +22,12 @@ final class NotificationService: NSObject {
     var activeConversationId: String?
 
     private var hasRegisteredForRemotes = false
-    private var aiFeaturesService: AIFeaturesService?
+    private var aiCoordinator: AIFeaturesCoordinator?
 
-    func configure(aiFeaturesService: AIFeaturesService? = nil) {
+    func configure(aiFeaturesService aiCoordinator: AIFeaturesCoordinator? = nil) {
         UNUserNotificationCenter.current().delegate = self
         Messaging.messaging().delegate = self
-        self.aiFeaturesService = aiFeaturesService
+        self.aiCoordinator = aiCoordinator
 
         // Register notification categories
         registerNotificationCategories()
@@ -318,7 +318,7 @@ final class NotificationService: NSObject {
         }
 
         // Check if suggestions are snoozed
-        if let service = aiFeaturesService, service.isSchedulingSuggestionsSnoozed(for: conversationId) {
+        if let service = aiCoordinator, service.schedulingService.isSchedulingSuggestionsSnoozed(for: conversationId) {
             #if DEBUG
             print("[NotificationService] Skipping notification - suggestions snoozed for \(conversationId)")
             #endif
@@ -548,9 +548,9 @@ extension NotificationService: UNUserNotificationCenterDelegate {
                 )
             } else if response.actionIdentifier == "DISMISS_COORDINATION_ALERT" {
                 // Dismiss the alert
-                if let alertId = userInfo["alertId"] as? String, let service = self.aiFeaturesService {
+                if let alertId = userInfo["alertId"] as? String, let service = self.aiCoordinator {
                     do {
-                        try service.dismissAlert(alertId)
+                        try service.coordinationInsightsService.dismissAlert(alertId)
                         self.clearCoordinationAlertTracking(for: alertId)
                         #if DEBUG
                         print("[NotificationService] Dismissed coordination alert: \(alertId)")
@@ -572,9 +572,9 @@ extension NotificationService: UNUserNotificationCenterDelegate {
                     )
                 }
             } else if response.actionIdentifier == "SNOOZE_SCHEDULING_SUGGESTIONS" {
-                if let conversationId, let service = self.aiFeaturesService {
+                if let conversationId, let service = self.aiCoordinator {
                     do {
-                        try service.snoozeSchedulingSuggestions(for: conversationId)
+                        try service.schedulingService.snoozeSuggestions(for: conversationId)
                         #if DEBUG
                         print("[NotificationService] Snoozed scheduling suggestions for \(conversationId)")
                         #endif

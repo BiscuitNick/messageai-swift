@@ -9,7 +9,7 @@ import SwiftUI
 import SwiftData
 
 struct CoordinationDashboardView: View {
-    @Environment(AIFeaturesService.self) private var aiFeaturesService
+    @Environment(AIFeaturesCoordinator.self) private var aiCoordinator
     @Environment(\.modelContext) private var modelContext
 
     @Query(
@@ -95,7 +95,7 @@ struct CoordinationDashboardView: View {
                 }
             }
             .refreshable {
-                await aiFeaturesService.refreshCoordinationInsights()
+                await aiCoordinator.refreshCoordinationInsights()
             }
         }
     }
@@ -482,7 +482,7 @@ struct CoordinationDashboardView: View {
         isRefreshing = true
         Task {
             // Force new analysis when user manually taps refresh
-            await aiFeaturesService.refreshCoordinationInsights(forceAnalysis: true)
+            await aiCoordinator.refreshCoordinationInsights(forceAnalysis: true)
             await MainActor.run {
                 isRefreshing = false
             }
@@ -491,7 +491,7 @@ struct CoordinationDashboardView: View {
 
     private func dismissAlert(_ alert: ProactiveAlertEntity) {
         do {
-            try aiFeaturesService.dismissAlert(alert.id)
+            try aiCoordinator.coordinationInsightsService.dismissAlert(alert.id)
         } catch {
             #if DEBUG
             print("[CoordinationDashboardView] Failed to dismiss alert: \(error.localizedDescription)")
@@ -501,7 +501,7 @@ struct CoordinationDashboardView: View {
 
     private func markAlertAsRead(_ alert: ProactiveAlertEntity) {
         do {
-            try aiFeaturesService.markAlertAsRead(alert.id)
+            try aiCoordinator.coordinationInsightsService.markAlertAsRead(alert.id)
         } catch {
             #if DEBUG
             print("[CoordinationDashboardView] Failed to mark alert as read: \(error.localizedDescription)")

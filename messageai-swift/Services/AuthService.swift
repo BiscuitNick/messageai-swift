@@ -34,7 +34,7 @@ final class AuthService {
 
     @ObservationIgnored private var authStateHandle: AuthStateDidChangeListenerHandle?
     @ObservationIgnored private var modelContext: ModelContext?
-    @ObservationIgnored private var firestoreService: FirestoreService?
+    @ObservationIgnored private var firestoreService: FirestoreCoordinator?
     @ObservationIgnored private var lastKnownUserId: String?
     @ObservationIgnored private var lastActivityTimestamp: Date = Date()
     @ObservationIgnored private var presenceHeartbeatTask: Task<Void, Never>?
@@ -55,11 +55,11 @@ final class AuthService {
         }
     }
 
-    func configure(modelContext: ModelContext, firestoreService: FirestoreService) {
+    func configure(modelContext: ModelContext, firestoreCoordinator: FirestoreCoordinator) {
         if self.modelContext !== modelContext {
             self.modelContext = modelContext
         }
-        self.firestoreService = firestoreService
+        self.firestoreService = firestoreCoordinator
     }
 
     func signUp(email: String, password: String, displayName: String) async {

@@ -31,7 +31,7 @@ struct NewConversationSheet: View {
     let availableUsers: [UserEntity]
     let onCreated: (String) -> Void
 
-    @Environment(MessagingService.self) private var messagingService
+    @Environment(MessagingCoordinator.self) private var messagingCoordinator
     @Environment(\.dismiss) private var dismiss
 
     @State private var mode: Mode
@@ -278,12 +278,12 @@ struct NewConversationSheet: View {
                 case .aiChat:
                     // Create NEW conversation with AI bot (always create new, never resume)
                     let participantIDs = Array(selectedParticipantIDs)
-                    id = try await messagingService.createConversationWithBot(
+                    id = try await messagingCoordinator.createConversationWithBot(
                         botId: participantIDs.first ?? "dash-bot"
                     )
                 case .direct:
                     let participantIDs = Array(selectedParticipantIDs)
-                    id = try await messagingService.createConversation(
+                    id = try await messagingCoordinator.createConversation(
                         with: participantIDs,
                         isGroup: false,
                         groupName: nil
@@ -291,7 +291,7 @@ struct NewConversationSheet: View {
                 case .group:
                     let participantIDs = Array(selectedParticipantIDs)
                     let name = groupName.trimmingCharacters(in: .whitespacesAndNewlines)
-                    id = try await messagingService.createConversation(
+                    id = try await messagingCoordinator.createConversation(
                         with: participantIDs,
                         isGroup: true,
                         groupName: name

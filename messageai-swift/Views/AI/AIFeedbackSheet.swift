@@ -12,7 +12,7 @@ struct AIFeedbackSheet: View {
     let conversationId: String
     let featureType: String
     let originalContent: String
-    @Environment(AIFeaturesService.self) private var aiService
+    @Environment(AIFeaturesCoordinator.self) private var aiCoordinator
     @Environment(AuthService.self) private var authService
     @Environment(\.dismiss) private var dismiss
 
@@ -126,7 +126,7 @@ struct AIFeedbackSheet: View {
 
         Task {
             do {
-                let feedback = AIFeaturesService.AIFeedback(
+                let feedback = AIFeaturesCoordinator.AIFeedback(
                     userId: userId,
                     conversationId: conversationId,
                     featureType: featureType,
@@ -136,7 +136,7 @@ struct AIFeedbackSheet: View {
                     comment: comment.isEmpty ? nil : comment
                 )
 
-                try await aiService.submitAIFeedback(feedback)
+                try await aiCoordinator.submitAIFeedback(feedback)
 
                 await MainActor.run {
                     dismiss()
@@ -157,6 +157,6 @@ struct AIFeedbackSheet: View {
         featureType: "summary",
         originalContent: "Team discussed Q4 roadmap and decided to prioritize feature X for the upcoming release."
     )
-    .environment(AIFeaturesService())
+    .environment(AIFeaturesCoordinator())
     .environment(AuthService())
 }

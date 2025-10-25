@@ -21,12 +21,12 @@ struct ChatView: View {
     private let participantIds: [String]
     private let scrollToMessageId: String?
 
-    @Environment(MessagingService.self) private var messagingService
+    @Environment(MessagingCoordinator.self) private var messagingCoordinator
     @Environment(AuthService.self) private var authService
     @Environment(NotificationService.self) private var notificationService
-    @Environment(FirestoreService.self) private var firestoreService
+    @Environment(FirestoreCoordinator.self) private var firestoreCoordinator
     @Environment(NetworkMonitor.self) private var networkMonitor
-    @Environment(AIFeaturesService.self) private var aiFeaturesService
+    @Environment(AIFeaturesCoordinator.self) private var aiCoordinator
     @Environment(TypingStatusService.self) private var typingStatusService
     @Environment(\.modelContext) private var modelContext
 
@@ -145,20 +145,20 @@ struct ChatView: View {
         .onAppear {
             notificationService.setActiveConversation(conversationId)
             // Start Firestore listeners for AI features
-            firestoreService.startActionItemsListener(conversationId: conversationId, modelContext: modelContext)
-            firestoreService.startDecisionsListener(conversationId: conversationId, modelContext: modelContext)
+            firestoreCoordinator.startActionItemsListener(conversationId: conversationId, modelContext: modelContext)
+            firestoreCoordinator.startDecisionsListener(conversationId: conversationId, modelContext: modelContext)
         }
         .onDisappear {
             notificationService.setActiveConversation(nil)
             // Stop Firestore listeners to prevent memory leaks
-            firestoreService.stopActionItemsListener(conversationId: conversationId)
-            firestoreService.stopDecisionsListener(conversationId: conversationId)
+            firestoreCoordinator.stopActionItemsListener(conversationId: conversationId)
+            firestoreCoordinator.stopDecisionsListener(conversationId: conversationId)
         }
         .sheet(isPresented: $showingSummary) {
             NavigationStack {
                 ScrollView {
                     ThreadSummaryCard(
-                        summary: aiFeaturesService.fetchThreadSummary(for: conversationId).map { entity in
+                        summary: aiCoordinator.summaryService.fetchThreadSummary(for: conversationId).map { entity in
                             ThreadSummaryResponse(
                                 summary: entity.summary,
                                 keyPoints: entity.keyPoints,
@@ -167,12 +167,12 @@ struct ChatView: View {
                                 messageCount: entity.messageCount
                             )
                         },
-                        isLoading: aiFeaturesService.summaryLoadingStates[conversationId] ?? false,
-                        error: aiFeaturesService.summaryErrors[conversationId],
+                        isLoading: aiCoordinator.summaryService.state.isLoading(conversationId),
+                        error: aiCoordinator.summaryService.state.error(for: conversationId),
                         onRefresh: {
                             Task {
                                 do {
-                                    _ = try await aiFeaturesService.summarizeThreadTask(
+                                    _ = try await aiCoordinator.summaryService.summarizeThread(
                                         conversationId: conversationId,
                                         forceRefresh: true
                                     )
@@ -198,14 +198,14 @@ struct ChatView: View {
         .onAppear {
             notificationService.setActiveConversation(conversationId)
             // Start Firestore listeners for AI features
-            firestoreService.startActionItemsListener(conversationId: conversationId, modelContext: modelContext)
-            firestoreService.startDecisionsListener(conversationId: conversationId, modelContext: modelContext)
+            firestoreCoordinator.startActionItemsListener(conversationId: conversationId, modelContext: modelContext)
+            firestoreCoordinator.startDecisionsListener(conversationId: conversationId, modelContext: modelContext)
         }
         .onDisappear {
             notificationService.setActiveConversation(nil)
             // Stop Firestore listeners to prevent memory leaks
-            firestoreService.stopActionItemsListener(conversationId: conversationId)
-            firestoreService.stopDecisionsListener(conversationId: conversationId)
+            firestoreCoordinator.stopActionItemsListener(conversationId: conversationId)
+            firestoreCoordinator.stopDecisionsListener(conversationId: conversationId)
             typingStatusService.stopObserving(conversationId: conversationId)
         }
         .task {
@@ -267,7 +267,7 @@ struct ChatView: View {
                                         isOnline: networkMonitor.isConnected,
                                         onRetryMessage: {
                                             Task {
-                                                try? await messagingService.retryFailedMessage(messageId: message.id)
+                                                try? await messagingCoordinator.retryFailedMessage(messageId: message.id)
                                             }
                                         }
                                     )
@@ -293,14 +293,14 @@ struct ChatView: View {
                 .onTapGesture {
                     // Track user interaction on tap
                     Task {
-                        await messagingService.markConversationAsRead(conversationId)
+                        await messagingCoordinator.markConversationAsRead(conversationId)
                     }
                 }
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 5).onChanged { _ in
                         // Track user interaction on scroll
                         Task {
-                            await messagingService.markConversationAsRead(conversationId)
+                            await messagingCoordinator.markConversationAsRead(conversationId)
                         }
                     }
                 )
@@ -317,7 +317,7 @@ struct ChatView: View {
                     }
 
                     Task {
-                        await messagingService.markConversationAsRead(conversationId)
+                        await messagingCoordinator.markConversationAsRead(conversationId)
                     }
                 }
                 .onChange(of: isBotTyping) { _, isTyping in
@@ -327,17 +327,17 @@ struct ChatView: View {
                         }
                     }
                 }
-                .onChange(of: aiFeaturesService.schedulingIntentDetected[conversationId]) { _, detected in
+                .onChange(of: aiCoordinator.schedulingService.intentDetected[conversationId]) { _, detected in
                     // Auto-show banner when scheduling intent is detected
-                    if detected == true && !aiFeaturesService.isSchedulingSuggestionsSnoozed(for: conversationId) {
+                    if detected == true && !aiCoordinator.schedulingService.isSchedulingSuggestionsSnoozed(for: conversationId) {
                         withAnimation(.easeInOut(duration: 0.3)) {
                             showSchedulingBanner = true
                         }
                     }
                 }
                 .task {
-                    messagingService.ensureMessageListener(for: conversationId)
-                    await messagingService.markConversationAsRead(conversationId)
+                    messagingCoordinator.ensureMessageListener(for: conversationId)
+                    await messagingCoordinator.markConversationAsRead(conversationId)
 
                     // Scroll to specific message if provided (from search), otherwise scroll to bottom
                     if let messageId = scrollToMessageId, !hasScrolledToMessage {
@@ -354,9 +354,9 @@ struct ChatView: View {
             }
 
             // Scheduling Intent Banner
-            if showSchedulingBanner && !aiFeaturesService.isSchedulingSuggestionsSnoozed(for: conversationId) {
+            if showSchedulingBanner && !aiCoordinator.schedulingService.isSchedulingSuggestionsSnoozed(for: conversationId) {
                 SchedulingIntentBanner(
-                    confidence: aiFeaturesService.schedulingIntentConfidence[conversationId] ?? 0.0,
+                    confidence: aiCoordinator.schedulingService.intentConfidence[conversationId] ?? 0.0,
                     onViewSuggestions: {
                         withAnimation {
                             showSchedulingBanner = false
@@ -366,7 +366,7 @@ struct ChatView: View {
                     },
                     onSnooze: {
                         do {
-                            try aiFeaturesService.snoozeSchedulingSuggestions(for: conversationId)
+                            try aiCoordinator.schedulingService.snoozeSuggestions(for: conversationId)
                             withAnimation {
                                 showSchedulingBanner = false
                             }
@@ -388,8 +388,8 @@ struct ChatView: View {
             if showMeetingSuggestions {
                 MeetingSuggestionsPanel(
                     suggestions: meetingSuggestions,
-                    isLoading: aiFeaturesService.meetingSuggestionsLoadingStates[conversationId] ?? false,
-                    error: aiFeaturesService.meetingSuggestionsErrors[conversationId],
+                    isLoading: aiCoordinator.meetingSuggestionsService.state.isLoading(conversationId),
+                    error: aiCoordinator.meetingSuggestionsService.state.error(for: conversationId),
                     onRefresh: { loadMeetingSuggestions(forceRefresh: true) },
                     onCopy: { suggestion in
                         copyMeetingSuggestion(suggestion)
@@ -414,8 +414,10 @@ struct ChatView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(activeTypers) { typer in
                         TypingBubble(
+                            user: participantLookup[typer.userId],
                             displayName: participantLookup[typer.userId]?.displayName ?? typer.displayName,
-                            isGroupChat: conversation.isGroup
+                            isGroupChat: conversation.isGroup,
+                            isOnline: networkMonitor.isConnected
                         )
                     }
                 }
@@ -471,7 +473,7 @@ struct ChatView: View {
             defer { isSending = false }
             do {
                 // Send user's message
-                try await messagingService.sendMessage(conversationId: conversationId, text: content)
+                try await messagingCoordinator.sendMessage(conversationId: conversationId, text: content)
                 messageText = ""
 
                 // Clear typing status
@@ -486,7 +488,7 @@ struct ChatView: View {
                     do {
                         // Build conversation history from captured data
                         let conversationHistory = currentMessages.map { msg in
-                            FirestoreService.AgentMessage(
+                            BotAgentService.AgentMessage(
                                 role: msg.senderId == currentUser.id ? "user" : "assistant",
                                 content: msg.text
                             )
@@ -494,13 +496,13 @@ struct ChatView: View {
 
                         // Add the current message to history
                         let fullHistory = conversationHistory + [
-                            FirestoreService.AgentMessage(
+                            BotAgentService.AgentMessage(
                                 role: "user",
                                 content: content
                             )
                         ]
 
-                        try await firestoreService.chatWithAgent(
+                        try await firestoreCoordinator.chatWithAgent(
                             messages: fullHistory,
                             conversationId: conversationId
                         )
@@ -551,7 +553,7 @@ struct ChatView: View {
 
         Task {
             do {
-                let response = try await aiFeaturesService.suggestMeetingTimes(
+                let response = try await aiCoordinator.meetingSuggestionsService.suggestMeetingTimes(
                     conversationId: conversationId,
                     participantIds: participantIds.filter { !$0.hasPrefix("bot:") },
                     durationMinutes: 60, // Default 1 hour
@@ -585,7 +587,7 @@ struct ChatView: View {
 
         // Track analytics
         Task {
-            await aiFeaturesService.trackMeetingSuggestionInteraction(
+            await aiCoordinator.meetingSuggestionsService.trackInteraction(
                 conversationId: conversationId,
                 action: "copy",
                 suggestionIndex: meetingSuggestions?.suggestions.firstIndex(where: { $0.id == suggestion.id }) ?? 0,
@@ -621,7 +623,7 @@ struct ChatView: View {
 
         // Track analytics
         Task {
-            await aiFeaturesService.trackMeetingSuggestionInteraction(
+            await aiCoordinator.meetingSuggestionsService.trackInteraction(
                 conversationId: conversationId,
                 action: "share",
                 suggestionIndex: meetingSuggestions?.suggestions.firstIndex(where: { $0.id == suggestion.id }) ?? 0,
@@ -672,7 +674,7 @@ struct ChatView: View {
 
         // Track analytics
         Task {
-            await aiFeaturesService.trackMeetingSuggestionInteraction(
+            await aiCoordinator.meetingSuggestionsService.trackInteraction(
                 conversationId: conversationId,
                 action: "add_to_calendar",
                 suggestionIndex: meetingSuggestions?.suggestions.firstIndex(where: { $0.id == suggestion.id }) ?? 0,
@@ -1316,50 +1318,68 @@ struct SchedulingIntentBanner: View {
 
 // MARK: - TypingBubble Component
 private struct TypingBubble: View {
+    let user: UserEntity?
     let displayName: String
     let isGroupChat: Bool
+    let isOnline: Bool
 
     var body: some View {
-        HStack(spacing: 6) {
-            // Show name for group chats
-            if isGroupChat {
-                Text(displayName)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        HStack(alignment: .bottom, spacing: 8) {
+            // User avatar (same style as bot typing indicator)
+            if let user {
+                AvatarView(
+                    user: user,
+                    size: 32,
+                    showPresenceIndicator: true,
+                    isOnline: isOnline
+                )
             }
 
-            // Animated dots
-            HStack(spacing: 4) {
-                ForEach(0..<3) { index in
-                    Circle()
-                        .fill(Color.gray.opacity(0.6))
-                        .frame(width: 6, height: 6)
-                        .animation(
-                            Animation.easeInOut(duration: 0.6)
-                                .repeatForever()
-                                .delay(Double(index) * 0.2),
-                            value: true
-                        )
-                        .offset(y: animationOffset(for: index))
+            VStack(alignment: .leading, spacing: 2) {
+                // Show name for group chats above the bubble
+                if isGroupChat {
+                    Text(displayName)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 4)
                 }
+
+                // Animated dots
+                HStack(spacing: 4) {
+                    ForEach(0..<3) { index in
+                        Circle()
+                            .fill(Color.gray.opacity(0.5))
+                            .frame(width: 8, height: 8)
+                            .scaleEffect(animationScale)
+                            .animation(
+                                Animation.easeInOut(duration: 0.6)
+                                    .repeatForever()
+                                    .delay(Double(index) * 0.2),
+                                value: animationScale
+                            )
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color(.systemGray5))
+                .clipShape(RoundedRectangle(cornerRadius: 16))
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color(.systemGray5))
-            .cornerRadius(16)
+
+            Spacer()
+        }
+        .padding(.leading, 8)
+        .onAppear {
+            animationScale = 1.2
         }
         .accessibilityLabel(isGroupChat ? "\(displayName) is typing" : "User is typing")
     }
 
-    @State private var isAnimating = false
+    @State private var animationScale: CGFloat = 0.8
 
-    private func animationOffset(for index: Int) -> CGFloat {
-        isAnimating ? -4 : 0
-    }
-
-    init(displayName: String, isGroupChat: Bool) {
+    init(user: UserEntity?, displayName: String, isGroupChat: Bool, isOnline: Bool) {
+        self.user = user
         self.displayName = displayName
         self.isGroupChat = isGroupChat
-        _isAnimating = State(initialValue: true)
+        self.isOnline = isOnline
     }
 }

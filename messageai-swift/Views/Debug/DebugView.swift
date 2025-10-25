@@ -9,8 +9,8 @@ struct DebugView: View {
 
     @Environment(AuthService.self) private var authService
     @Environment(NotificationService.self) private var notificationService
-    @Environment(MessagingService.self) private var messagingService
-    @Environment(FirestoreService.self) private var firestoreService
+    @Environment(MessagingCoordinator.self) private var messagingCoordinator
+    @Environment(FirestoreCoordinator.self) private var firestoreCoordinator
     @Environment(NetworkSimulator.self) private var networkSimulator
     private let functions = Functions.functions(region: "us-central1")
 
@@ -175,9 +175,7 @@ struct DebugView: View {
         Section("Messaging Service") {
             LabeledContent("Configured", value: messagingDebug.isConfigured ? "Yes" : "No")
             LabeledContent("Active User ID", value: messagingDebug.currentUserId ?? "nil")
-            LabeledContent("Conversation Listener", value: messagingDebug.conversationListenerActive ? "Active" : "Inactive")
-            LabeledContent("Message Listeners", value: "\(messagingDebug.activeMessageListeners)")
-            LabeledContent("Pending Message Tasks", value: "\(messagingDebug.pendingMessageTasks)")
+            LabeledContent("Active Listeners", value: "\(messagingDebug.activeListeners)")
         }
     }
 
@@ -342,7 +340,7 @@ struct DebugView: View {
         isRecreatingBots = true
         defer { isRecreatingBots = false }
         do {
-            try await firestoreService.ensureBotExists()
+            try await firestoreCoordinator.ensureBotExists()
             recreateBotsStatus = "Bots recreated at \(Date().formatted(dateTimeFormatter))"
         } catch {
             recreateBotsError = describe(error)
@@ -356,7 +354,7 @@ struct DebugView: View {
         isDeletingBots = true
         defer { isDeletingBots = false }
         do {
-            try await firestoreService.deleteBots()
+            try await firestoreCoordinator.deleteBots()
             deleteBotsStatus = "Bots deleted at \(Date().formatted(dateTimeFormatter))"
         } catch {
             deleteBotsError = describe(error)
@@ -382,8 +380,8 @@ struct DebugView: View {
         FirebaseApp.app()?.options
     }
 
-    private var messagingDebug: MessagingService.DebugSnapshot {
-        messagingService.debugSnapshot
+    private var messagingDebug: MessagingCoordinator.DebugSnapshot {
+        messagingCoordinator.debugSnapshot
     }
 
     private func statusDescription(for status: UNAuthorizationStatus) -> String {
