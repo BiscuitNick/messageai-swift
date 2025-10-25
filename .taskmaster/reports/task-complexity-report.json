@@ -1,6 +1,6 @@
 {
 	"meta": {
-		"generatedAt": "2025-10-24T02:21:47.447Z",
+		"generatedAt": "2025-10-25T01:26:18.106Z",
 		"tasksAnalyzed": 10,
 		"totalTasks": 10,
 		"analysisCount": 10,
@@ -11,83 +11,83 @@
 	"complexityAnalysis": [
 		{
 			"taskId": 1,
-			"taskTitle": "Establish AI Features Service Layer",
-			"complexityScore": 8,
+			"taskTitle": "Reorganize Swift sources into PRD-aligned module directories",
+			"complexityScore": 7,
 			"recommendedSubtasks": 6,
-			"expansionPrompt": "Ask Task Master to produce subtasks covering: (1) scaffolding `AIFeaturesService` with Firebase Functions and Firestore clients; (2) registering the service in `messageai_swiftApp.swift` and `ContentView`; (3) adding delegate or callback hooks in `MessagingService` and `FirestoreService`; (4) introducing shared Codable DTOs in `Models.swift`; (5) handling auth lifecycle, caching, and background `Task` usage; (6) writing unit coverage for DTO decoding and environment injection.",
-			"reasoning": "Requires introducing a new observer service and rewiring multiple core components. The app currently injects only AuthService, FirestoreService, MessagingService, NotificationService, and NetworkMonitor into the SwiftUI environment (messageai-swift/messageai_swiftApp.swift:54). Content lifecycle code is coupled to that set (messageai-swift/ContentView.swift:65), and MessagingService mutates SwiftData directly from Firestore snapshots with no delegate seams yet (messageai-swift/Services/MessagingService.swift:947). Existing services like FirestoreService are the only infrastructure in the Services folder today (messageai-swift/Services/FirestoreService.swift:16), so building AIFeaturesService plus auth-aware caching and tests is a non-trivial greenfield effort."
+			"expansionPrompt": "Break this task into subtasks that inventory existing Swift sources, define the Services/Models/Views folder plan, move files and assets into the new structure with matching disk folders, update Xcode project references, split oversized composites, and re-run builds/UI smoke tests.",
+			"reasoning": "Most core files are still sitting in the project root (for example `messageai-swift/ChatView.swift:1` and `messageai-swift/Services/MessagingService.swift:1`), and several of them exceed a few hundred lines (`messageai-swift/ChatView.swift:863`). Moving dozens of sources while keeping SwiftData models and Firebase resources wired up requires careful PBX updates and regression testing, so the migration is moderately high effort."
 		},
 		{
 			"taskId": 2,
-			"taskTitle": "Deliver Thread Summarization End-to-End",
-			"complexityScore": 8,
-			"recommendedSubtasks": 7,
-			"expansionPrompt": "Have Task Master split this into: (1) implementing the `summarizeThread` callable in `functions/src/index.ts`; (2) defining summary DTOs and persistence helpers in `Models.swift`; (3) adding the async `summarizeThread` API inside `AIFeaturesService`; (4) wiring optimistic loading, caching, and error surfacing; (5) building `ThreadSummaryCard` plus ChatView entry points; (6) integrating optional save flows; (7) creating Jest, XCTest, and UI tests per the strategy.",
-			"reasoning": "The backend currently exposes only agent chat utilities without any summarization callable (functions/src/index.ts:392). SwiftData models stop at MessageEntity so there is no storage shape for summaries yet (messageai-swift/Models.swift:103). ChatView renders just the transcript and composer with no summary affordances (messageai-swift/ChatView.swift:31). Delivering this feature means new cloud code, a fresh SwiftData entity, AIFeaturesService orchestration, offline-safe caching, and new UI entry points plus tests, all of which depend on the yet-to-be-built AI service layer."
+			"taskTitle": "Adopt MessageDeliveryState schema across models and Firestore payloads",
+			"complexityScore": 6,
+			"recommendedSubtasks": 5,
+			"expansionPrompt": "Create subtasks for defining the new MessageDeliveryState enum, updating MessageEntity storage/migration, adjusting Firestore serialization/deserialization for dual-field compatibility, coordinating any shared constants, and refreshing unit tests.",
+			"reasoning": "Message persistence still relies on a four-case `DeliveryStatus` enum (`messageai-swift/Models.swift:279`), and Firestore writes the old `deliveryStatus` field directly from the send flow (`messageai-swift/Services/MessagingService.swift:657`). Test suites such as `messageai-swiftTests/DeliveryStatusTests.swift:12` bake in the legacy values, so introducing the new schema plus migration/compat layers is a multi-step but contained effort."
 		},
 		{
 			"taskId": 3,
-			"taskTitle": "Implement Action Item Extraction Workflow",
-			"complexityScore": 9,
-			"recommendedSubtasks": 8,
-			"expansionPrompt": "Request subtasks that cover: (1) creating the `extractActionItems` callable with OpenAI + zod validation; (2) defining Firestore upsert logic for the `actionItems` subcollection; (3) adding `ActionItemEntity` and any related enums in `Models.swift`; (4) extending `FirestoreService` or `AIFeaturesService` to sync that subcollection; (5) exposing extraction and persistence helpers in `AIFeaturesService`; (6) building the Action Items tab, grouping UI, and CRUD flows in SwiftUI; (7) wiring manual create/edit operations back to Firestore; (8) implementing emulator, unit, and UI tests.",
-			"reasoning": "No callable exists for action item extraction today, so the backend work is greenfield. SwiftData only tracks users, conversations, bots, and messages (messageai-swift/Models.swift:17 and messageai-swift/Models.swift:103), and FirestoreService only listens to users and bots (messageai-swift/Services/FirestoreService.swift:80), meaning new entities and listeners must be added. ChatView lacks any segmented tabs or task presentation (messageai-swift/ChatView.swift:31). Delivering structured extraction, cross-device sync, editable UI, and bidirectional Firestore writes is a large refactor touching both platforms with significant testing overhead."
+			"taskTitle": "Implement delivery state transitions and read receipt writes in MessagingService",
+			"complexityScore": 8,
+			"recommendedSubtasks": 6,
+			"expansionPrompt": "Outline subtasks to cover optimistic pending insertion, sent/delivered/read transition handling from Firestore snapshots, failure paths with retry hooks, debounced listener updates, read receipt batching, and comprehensive service tests or emulator runs.",
+			"reasoning": "Messaging currently flips only between `.sending` and `.sent` and even marks failures back to `.sending` (`messageai-swift/Services/MessagingService.swift:628` and `messageai-swift/Services/MessagingService.swift:1167`). Building the full PRD state machine with listener-driven updates, retries, and batched read receipts will touch async flows, concurrency, and Firestore interactions, making this a high-complexity change."
 		},
 		{
 			"taskId": 4,
-			"taskTitle": "Ship Semantic Smart Search Experience",
-			"complexityScore": 8,
-			"recommendedSubtasks": 7,
-			"expansionPrompt": "Generate subtasks such as: (1) adding the `smartSearch` callable in `functions/src/index.ts` with ranking logic; (2) defining Codable models or SwiftData cache structures for search results; (3) exposing `smartSearch(query:)` and caching in `AIFeaturesService`; (4) persisting recent queries and eviction on logout; (5) creating `SmartSearchView` with navigation into `ChatView`; (6) integrating the new view with `ConversationsRootView`; (7) adding Jest, unit, and UI automation coverage.",
-			"reasoning": "Current search is a simple client-side filter over cached conversations (messageai-swift/ConversationsRootView.swift:31), so semantic search requires backend support and new data plumbing. There is no callable beyond chat bots in the functions bundle (functions/src/index.ts:392) and no SwiftData model for search state (messageai-swift/Models.swift:103). Presenting grouped semantic results and deep-linking into ChatView will require new SwiftUI surfaces and navigation updates, plus caching and testing, making this a substantial effort."
+			"taskTitle": "Revamp message cell UI for new delivery indicators and retry UX",
+			"complexityScore": 6,
+			"recommendedSubtasks": 4,
+			"expansionPrompt": "Create subtasks for designing assets/state mapping, updating message metadata rows to new icons and retry affordances, enriching group read receipts, and adding accessibility plus snapshot/UITest coverage.",
+			"reasoning": "The bubble metadata currently renders a minimal icon only for `.sending` and falls back to generic checkmarks (`messageai-swift/ChatView.swift:889` and `messageai-swift/ChatView.swift:946`). Replacing this with distinct animated states, retry actions, and group read count tooling requires non-trivial SwiftUI refactoring and visual validation."
 		},
 		{
 			"taskId": 5,
-			"taskTitle": "Deploy Priority Message Detection Pipeline",
+			"taskTitle": "Implement typing status data layer with expiration semantics",
 			"complexityScore": 7,
-			"recommendedSubtasks": 6,
-			"expansionPrompt": "Ask for subtasks that: (1) add the Firestore onCreate trigger performing priority classification; (2) persist priority fields on message docs; (3) extend `MessageEntity` with priority score/label defaults; (4) update `MessagingService` parsing and local sync logic; (5) add badges, filters, and notification sound/category handling in the UI and NotificationService; (6) create emulator, unit, and UI tests.",
-			"reasoning": "MessageEntity currently stores only text, delivery status, and read state (messageai-swift/Models.swift:103). MessagingService only extracts sender, text, status, and receipts when syncing Firestore snapshots (messageai-swift/Services/MessagingService.swift:953), and NotificationService always posts a default alert (messageai-swift/Services/NotificationService.swift:74). Implementing priority classification means adding a new Firestore trigger, expanding the data model safely, updating listeners and UI affordances, and adjusting notification routing, which is moderately complex but scoped to existing surfaces."
+			"recommendedSubtasks": 5,
+			"expansionPrompt": "Plan subtasks for defining the TypingStatus model, implementing Firestore read/write APIs with expiry logic, managing local 5-second timers/cleanup, integrating lifecycle hooks, and building unit tests with mocked Firestore.",
+			"reasoning": "Typing feedback today is a simple local boolean meant for bots (`messageai-swift/ChatView.swift:35` and `messageai-swift/ChatView.swift:433`), so introducing a dedicated service demands new models, Firestore coordination, actors/timers, and teardown semantics. The combination of async Firestore work and expiry guarantees makes this a fairly involved subsystem."
 		},
 		{
 			"taskId": 6,
-			"taskTitle": "Implement Decision Tracking System",
-			"complexityScore": 9,
-			"recommendedSubtasks": 8,
-			"expansionPrompt": "Break this into subtasks covering: (1) implementing the `trackDecisions` callable with Firestore writes; (2) modeling `DecisionEntity` and related SwiftData relationships; (3) syncing decision subcollections via `AIFeaturesService` or `FirestoreService`; (4) exposing decision fetch and persistence APIs; (5) building the Decisions tab UI with timeline, status changes, and reminder hooks; (6) integrating reminder scheduling through `NotificationService`; (7) supporting manual add/edit flows; (8) delivering the specified tests.",
-			"reasoning": "The current data layer has no decision entities or sync logic beyond users/bots/messages (messageai-swift/Models.swift:17 and messageai-swift/Services/FirestoreService.swift:80). ChatView lacks any decision-related UI (messageai-swift/ChatView.swift:31). Implementing extraction, storage, timeline rendering, reminder scheduling, and edit flows spans backend callable work, new SwiftData models, service synchronization, and complex SwiftUI interactions, which pushes this task into high complexity."
+			"taskTitle": "Render real-time multi-user typing indicators in ChatView",
+			"complexityScore": 6,
+			"recommendedSubtasks": 4,
+			"expansionPrompt": "Break this task into subtasks handling TypingStatusService injection, state management for active typers, SwiftUI layout/animation for individual and group bubbles, and UI tests or previews that validate fade/timeout behaviors.",
+			"reasoning": "ChatView will need to replace the current single `isBotTyping` flag with streamed data and multi-user layouts (`messageai-swift/ChatView.swift:249` and `messageai-swift/ChatView.swift:472`). Coordinating async streams, transitions, and group presentation is moderate complexity, especially once tied to scroll positioning and accessibility."
 		},
 		{
 			"taskId": 7,
-			"taskTitle": "Build Meeting Suggestion Engine for Proactive Assistant",
-			"complexityScore": 8,
-			"recommendedSubtasks": 7,
-			"expansionPrompt": "Request subtasks such as: (1) adding the `suggestMeetingTimes` callable and analytics writes in `functions/src/index.ts`; (2) defining meeting suggestion DTOs and SwiftData entities; (3) exposing suggestion APIs, caching, and expiry logic in `AIFeaturesService`; (4) integrating with ChatView via a Smart Suggestions panel; (5) handling share/copy CTAs and deep links; (6) recording analytics or counters in Firestore; (7) building unit, emulator, and UI automation coverage.",
-			"reasoning": "There is no meeting suggestion backend today (functions/src/index.ts:392), nor SwiftData storage for suggestions (messageai-swift/Models.swift:103). ChatView has no panel or CTA infrastructure for proactive suggestions (messageai-swift/ChatView.swift:31). Implementing ranked suggestions with caching, UI presentation, share flows, and analytics touches both platforms and depends on the new AI service layer, yielding high but manageable complexity."
+			"taskTitle": "Introduce NetworkSimulator service with persisted debug settings",
+			"complexityScore": 7,
+			"recommendedSubtasks": 5,
+			"expansionPrompt": "Draft subtasks to define latency/drop profiles, implement the async execute wrapper with seeded randomness, add persistence and publishers for simulator state, expose debug controls, and author deterministic unit tests.",
+			"reasoning": "Networking support is currently limited to a reachability monitor (`messageai-swift/Services/NetworkMonitor.swift:1`), so building a simulator entails new condition models, async wrappers, persistence, and observable state. Ensuring deterministic tests around random latency/drop behavior adds to the implementation load."
 		},
 		{
 			"taskId": 8,
-			"taskTitle": "Detect Scheduling Intent and Surface Smart Suggestions",
-			"complexityScore": 9,
-			"recommendedSubtasks": 8,
-			"expansionPrompt": "Have Task Master outline subtasks covering: (1) creating the Firestore trigger or pipeline that annotates messages with scheduling intent; (2) extending data models and listeners to capture `schedulingIntent` and confidence; (3) adding reactive logic in `AIFeaturesService` to prefetch meeting suggestions; (4) debouncing and snooze persistence in SwiftData; (5) updating ChatView to auto-present and dismiss the Smart Suggestions panel; (6) integrating NotificationService with a scheduling notification category; (7) coordinating state with `NetworkMonitor`; (8) adding emulator, unit, and UI tests.",
-			"reasoning": "MessagingService currently consumes message snapshots without broadcasting extra metadata (messageai-swift/Services/MessagingService.swift:947), and NotificationService has no special-case scheduling flows (messageai-swift/Services/NotificationService.swift:74). Delivering automatic intent detection requires a new trigger, extending message models, orchestrating prefetch logic in the forthcoming AI service, managing snooze state, and coordinating UI plus notifications, which is a broad, high-complexity change closely coupled to Task 7."
+			"taskTitle": "Apply network simulation to Firebase services and messaging flows",
+			"complexityScore": 7,
+			"recommendedSubtasks": 5,
+			"expansionPrompt": "Create subtasks for injecting the simulator into FirestoreService/MessagingService, wrapping reads/writes/listeners appropriately, handling simulated errors in UI flows, syncing with debug controls, and validating with targeted service tests.",
+			"reasoning": "Current Firestore calls execute directly without abstraction (`messageai-swift/Services/MessagingService.swift:657` and `messageai-swift/Services/FirestoreService.swift:514`), so threading a simulator through async pipelines, listeners, and retry paths is non-trivial. Coordinating error surfacing and maintaining responsiveness pushes the effort into the higher range."
 		},
 		{
 			"taskId": 9,
-			"taskTitle": "Launch Proactive Coordination Dashboard and Notifications",
-			"complexityScore": 9,
-			"recommendedSubtasks": 8,
-			"expansionPrompt": "Generate subtasks like: (1) creating the scheduled coordination analysis function in `functions/src/index.ts`; (2) defining SwiftData entities for coordination insights and proactive alerts; (3) building sync and purge routines in `AIFeaturesService`; (4) wiring background refresh using `Task.detached` or similar; (5) implementing `CoordinationDashboardView` with drill-ins; (6) updating `NotificationService` with alert categories, sounds, and deduping; (7) ensuring logout clears cached insights; (8) adding emulator, unit, and UI automation coverage.",
-			"reasoning": "There is no scheduled analysis function or coordination data today (functions/src/index.ts:392 and messageai-swift/Models.swift:103). The service layer will need new background refresh pathways on top of the forthcoming AI orchestrator, and NotificationService currently handles only generic new-message alerts (messageai-swift/Services/NotificationService.swift:74). Building hourly analytics, new SwiftData entities, UI dashboards, and proactive notifications is a large, multi-surface effort with many dependencies."
+			"taskTitle": "Enhance DebugView with database usage tracking and connectivity controls",
+			"complexityScore": 5,
+			"recommendedSubtasks": 4,
+			"expansionPrompt": "Plan subtasks for tracking tool usage history, wiring in simulator-backed connectivity controls with persistence, rendering status indicators, and adding ViewInspector coverage or manual QA steps.",
+			"reasoning": "DebugView is presently a static list of maintenance actions (`messageai-swift/DebugView.swift:36`) with no notion of tool history or network controls. Augmenting it requires new state storage and bindings to the future simulator, but the scope is confined to SwiftUI plumbing, keeping complexity moderate."
 		},
 		{
 			"taskId": 10,
-			"taskTitle": "Finalize AI Feature Quality, Metrics, and Resilience",
-			"complexityScore": 8,
-			"recommendedSubtasks": 6,
-			"expansionPrompt": "Ask for subtasks that: (1) add retry and backoff utilities around callable usage in `AIFeaturesService`; (2) implement SwiftData-backed caching with TTLs for summaries and search; (3) log telemetry to Firestore or Crashlytics with necessary schema changes; (4) build in-app feedback flows on AI surfaces; (5) run and document regression and failure-mode tests; (6) remove temporary instrumentation once validated.",
-			"reasoning": "Current service calls have no centralized retry or telemetry; for example FirestoreService writes directly with a single try (messageai-swift/Services/FirestoreService.swift:38) and MessagingService handles network write failures ad hoc (messageai-swift/Services/MessagingService.swift:1064). None of the planned AI endpoints yet include caching or feedback loops, so this task must add cross-cutting resilience once the new features land. Coordinating retries, metrics, cache invalidation, feedback capture, and regression documentation across multiple forthcoming features is a substantial hardening effort."
+			"taskTitle": "Expand automated test coverage for delivery states, typing, and network simulation",
+			"complexityScore": 6,
+			"recommendedSubtasks": 5,
+			"expansionPrompt": "Outline subtasks for extending delivery state unit tests, creating TypingStatusService test doubles, adding deterministic NetworkSimulator tests, updating UITests for retry flows and connectivity toggles, and integrating coverage reporting.",
+			"reasoning": "Existing tests validate only the four legacy delivery statuses (`messageai-swiftTests/DeliveryStatusTests.swift:12`) and make no mention of typing or simulated network layers. Adding targeted async/unit/UITests across the new components, potentially with emulator setups, represents a sizable but bounded testing effort."
 		}
 	]
 }

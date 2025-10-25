@@ -1,0 +1,1056 @@
+{
+  "master": {
+    "tasks": [
+      {
+        "id": 1,
+        "title": "Establish AI Features Service Layer",
+        "description": "Create a centralized AIFeaturesService and supporting plumbing so the iOS app can orchestrate AI workflows via Firebase functions.",
+        "details": "Implementation outline:\n- Add `messageai-swift/Services/AIFeaturesService.swift` with @Observable class that keeps references to `Firestore`, `Functions`, caches, and exposes async helpers for summaries, action items, search, priority updates, decisions, and proactive insights.\n- Inject the service into the SwiftUI environment in `messageai_swiftApp.swift` and `ContentView` alongside existing services, and manage lifecycle (sign-in/out) with `AuthService`.\n- Extend `MessagingService` and `FirestoreService` with lightweight delegates or callbacks so AIFeaturesService can observe message mutations without duplicating listeners.\nPseudo-code:\n```\n@Observable final class AIFeaturesService {\n    private let functions = Functions.functions(region: \"us-central1\")\n    func call<T: Decodable>(_ name: String, payload: [String: Any]) async throws -> T {\n        let result = try await functions.httpsCallable(name).call(payload)\n        return try decode(result.data)\n    }\n}\n```\n- Prepare shared DTOs (Codable structs) for responses in `messageai-swift/Models/AIModels.swift` to avoid duplicating parsing logic.\n- Ensure background task support by scheduling Task.detached calls and posting updates via MainActor for UI bindings.",
+        "testStrategy": "- Add XCTest covering JSON decoding of sample function payloads into the new DTOs.\n- Use Firebase emulator suite to validate callable functions are invoked with correct payload keys from the service stubs.\n- Add SwiftUI preview smoke test ensuring the environment contains AIFeaturesService without crashing.",
+        "priority": "medium",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement core AIFeaturesService scaffold",
+            "description": "Create initial AIFeaturesService with Firebase Functions and Firestore references plus async callable helper.",
+            "dependencies": [],
+            "details": "Add AIFeaturesService.swift containing @Observable class wiring Firestore, Functions, cache placeholders, and generic call<T> async helper.\n<info added on 2025-10-24T07:04:13.433Z>\nImplemented messageai-swift/Services/AIFeaturesService.swift as a @MainActor @Observable final class aligned with AuthService/MessagingService/FirestoreService, wiring Functions.functions(region: \"us-central1\"), Firestore.firestore(), and SwiftData dependencies. Added configure(modelContext:authService:messagingService:firestoreService:) to capture required services, @ObservationIgnored caches (summaryCache/searchCache/actionItemsCache), and a generic call<T: Decodable> helper that wraps HTTPS callable invocations with JSON decoding and error propagation. Introduced AIFeaturesError covering invalidResponse/notConfigured/unauthorized, lifecycle hooks (onSignIn/onSignOut) that call reset(), and reset()/clearCaches() for state cleanup. Build passes with the new scaffold in place.\n</info added on 2025-10-24T07:04:13.433Z>",
+            "status": "done",
+            "testStrategy": "Compile locally to ensure new service builds and passes SwiftLint if configured.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Inject AIFeaturesService into SwiftUI environment",
+            "description": "Register the new service within messageai_swiftApp and ContentView to expose it across the UI layer.",
+            "dependencies": [
+              1
+            ],
+            "details": "Update app entry points to instantiate AIFeaturesService alongside existing services and inject via environment modifiers for previews and runtime.\n<info added on 2025-10-24T07:06:24.406Z>\nmessageai-swift/messageai_swiftApp.swift:22,49,61 now stores AIFeaturesService in @State, instantiates it during init, and injects it through .environment for previews/runtime. messageai-swift/ContentView.swift:24,67-72,105,120 consumes the shared service via @Environment, configures it alongside Auth/Firestore/Messaging in the .task body, and calls onSignOut/onSignIn inside the auth change handler to keep lifecycle events aligned.\n</info added on 2025-10-24T07:06:24.406Z>",
+            "status": "done",
+            "testStrategy": "Run the app or previews to confirm AIFeaturesService appears in EnvironmentObjects without crashes.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Expose messaging hooks for AI observers",
+            "description": "Add delegate or callback seams in MessagingService and FirestoreService so AIFeaturesService can respond to message changes.",
+            "dependencies": [
+              1
+            ],
+            "details": "Introduce lightweight protocol or closure callbacks in MessagingService and FirestoreService that notify AIFeaturesService of message mutations without duplicating listeners.\n<info added on 2025-10-24T07:11:11.172Z>\nImplemented AI mutation hooks by adding the optional `onMessageMutation` closure in messageai-swift/Services/MessagingService.swift (reset in `reset()`, fired after optimistic inserts in `sendMessage` and `sendMessageAsBot`), introduced the forwarding method `onMessageMutation(conversationId:messageId:)` in messageai-swift/Services/AIFeaturesService.swift for future analysis work, and wired the closure from ContentView’s startup and re-auth flows using weak captures so AIFeaturesService now observes message changes without new Firestore listeners.\n</info added on 2025-10-24T07:11:11.172Z>",
+            "status": "done",
+            "testStrategy": "Execute unit or integration smoke tests verifying message update events still propagate correctly.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 4,
+            "title": "Define shared AI Codable DTOs",
+            "description": "Create Codable structs in Models.swift shared by AI workflows to standardize Firebase function payload decoding.",
+            "dependencies": [
+              1
+            ],
+            "details": "Add Swift models for summaries, action items, search results, priority updates, decisions, and insights, ensuring CodingKeys align with backend schema.\n<info added on 2025-10-24T07:08:18.812Z>\nImplemented comprehensive AI Codable DTO set in messageai-swift/Models/AIModels.swift covering ThreadSummaryResponse, ActionItem and ActionItemsResponse (with ActionItemPriority and ActionItemStatus enums), SmartSearchResponse/SearchResult, PriorityUpdateResponse/PriorityUpdate (with MessagePriority enum), DecisionsResponse/Decision (with DecisionStatus enum), MeetingSuggestionsResponse/MeetingSuggestion/ProposedTime, SchedulingIntentResponse/SchedulingIntent, ProactiveInsightsResponse/ProactiveInsight (with InsightType enum), plus reusable AIResponse<T>; all models map camelCase properties to backend snake_case via CodingKeys and compile cleanly.\n</info added on 2025-10-24T07:08:18.812Z>",
+            "status": "done",
+            "testStrategy": "Add XCTest decoding fixtures for each DTO to ensure JSON payloads deserialize properly.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 5,
+            "title": "Implement auth lifecycle, caching, and background tasks",
+            "description": "Handle sign-in/out transitions, cache management, and background Task usage within AIFeaturesService.",
+            "dependencies": [
+              1,
+              3
+            ],
+            "details": "Integrate AuthService hooks to clear caches on sign-out, warm caches on sign-in, and wrap async work in Task.detached with MainActor updates.\n<info added on 2025-10-24T07:12:56.534Z>\nAuth lifecycle hooks now dispatch from ContentView.swift lines 105-135, invoking AIFeaturesService.onSignIn() when a user session appears and onSignOut() during teardown so MessagingService.reset() and AuthService transitions stay aligned. reset() and clearCaches() in AIFeaturesService.swift lines 123-142 flush summaryCache, searchCache, and actionItemsCache on sign-out while resetting error state and leaving warm-cache stubs for future prefetch. Added performBackgroundAIAnalysis helper in AIFeaturesService.swift lines 164-215 wrapping Task.detached with weak self capture and MainActor completion plus analyzeConversationInBackground(...) sample to demonstrate the pattern.\n</info added on 2025-10-24T07:12:56.534Z>",
+            "status": "done",
+            "testStrategy": "Manually sign in/out in simulator to verify caches reset and UI bindings refresh without threading issues.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 6,
+            "title": "Add unit coverage for DTOs and environment wiring",
+            "description": "Write tests covering new AI DTO decoding and environment injection behavior for AIFeaturesService.",
+            "dependencies": [
+              2,
+              4,
+              5
+            ],
+            "details": "Create XCTest cases verifying environment objects load AIFeaturesService in views and decode DTO fixtures, including failure cases.\n<info added on 2025-10-24T07:20:00.779Z>\nImplemented 17 JSON decoding and enum coverage cases in messageai-swiftTests/AIModelsTests.swift exercising ThreadSummaryResponse, ActionItem, SearchResult, PriorityUpdate, Decision, MeetingSuggestion, SchedulingIntent, ProactiveInsight, AIResponse<T>, and null-field edge paths with ISO8601 decoding. Added 11 lifecycle, configuration, observer, cache, background task, and observable state assertions in messageai-swiftTests/AIFeaturesServiceTests.swift using the in-memory SwiftData container pattern to validate analyzeConversationInBackground, onSignIn/onSignOut, reset(), clearCaches(), onMessageMutation, and AIFeaturesError descriptions. All 28 tests pass, confirming DTO fixtures decode correctly and AIFeaturesService wiring behaves as expected in the SwiftUI environment.\n</info added on 2025-10-24T07:20:00.779Z>",
+            "status": "done",
+            "testStrategy": "Run `xcodebuild test` for the MessageAi scheme to ensure new tests pass and guard against regressions.",
+            "parentId": "undefined"
+          }
+        ],
+        "complexity": 8,
+        "recommendedSubtasks": 6,
+        "expansionPrompt": "Ask Task Master to produce subtasks covering: (1) scaffolding `AIFeaturesService` with Firebase Functions and Firestore clients; (2) registering the service in `messageai_swiftApp.swift` and `ContentView`; (3) adding delegate or callback hooks in `MessagingService` and `FirestoreService`; (4) introducing shared Codable DTOs in `Models.swift`; (5) handling auth lifecycle, caching, and background `Task` usage; (6) writing unit coverage for DTO decoding and environment injection."
+      },
+      {
+        "id": 2,
+        "title": "Deliver Thread Summarization End-to-End",
+        "description": "Implement backend and frontend flow that summarizes chat threads on demand.",
+        "details": "Implementation outline:\n- Extend `functions/src/index.ts` with callable `summarizeThread` that fetches last N messages from Firestore (conversation subcollection), batches content, and calls OpenAI GPT-4o-mini with system prompt prioritizing decisions, action items, updates, next steps.\nPseudo-code:\n```\nconst summarizeThread = onCall(async ({ data, auth }) => {\n  const messages = await fetchMessages(data.conversationId, 50);\n  const prompt = buildSummaryPrompt(messages);\n  const response = await openai.responses.create({ model: \"gpt-4o-mini\", input: prompt });\n  return formatSummary(response);\n});\n```\n- In iOS, add `ThreadSummaryEntity` (conversationId, summary, createdAt, sourceRange) to `Models.swift` and persistence helpers in AIFeaturesService.\n- Extend AIFeaturesService with `summarizeThread(conversation:)` that handles optimistic loading, caches result, and saves summary if user chooses.\n- Update `ChatView` to add long-press action sheet entry and header button that presents `ThreadSummaryCard` (new SwiftUI view showing expandable summary, save button, timestamp).\n- Respect offline state by queuing request via NetworkMonitor and surfacing errors through Alert.\n",
+        "testStrategy": "- Write Jest test (or firebase-functions-test) mocking Firestore and OpenAI client to assert correct payload and formatting.\n- Add Swift unit test verifying ThreadSummaryEntity persistence and deduping logic when called multiple times.\n- Record UITest that triggers long-press, waits for spinner, and validates summary card renders for seeded conversation using the Firebase emulator.",
+        "priority": "medium",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement summarizeThread callable",
+            "description": "Extend Firebase Functions backend with a callable endpoint that summarizes recent conversation messages.",
+            "dependencies": [],
+            "details": "Add summarizeThread to functions/src/index.ts, fetch last 50 conversation messages, build structured prompt, invoke OpenAI gpt-4o-mini, and format the summary payload for clients.\n<info added on 2025-10-24T07:27:30.843Z>\nImplemented callable summarizeThread in functions/src/index.ts line 499 that enforces requireAuth and participant membership before querying conversations/{conversationId}/messages for up to 50 docs, enriching each entry with display names from users and bots. Conversation context is rendered as DisplayName: message text and passed to generateObject using the shared gpt-4o-mini client plus zod summary schema and a system prompt that emphasizes key points, decisions, action items, and updates. The function returns the ThreadSummaryResponse shape (summary, key_points, conversation_id, timestamp, message_count), reads OPENAI_API_KEY from Firebase functions params, passes npm run build, and is ready for AIFeaturesService integration.\n</info added on 2025-10-24T07:27:30.843Z>",
+            "status": "done",
+            "testStrategy": "Add firebase-functions-test Jest suite mocking Firestore and OpenAI client to validate payload composition and response formatting.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Define ThreadSummary models and persistence",
+            "description": "Introduce Swift models and storage helpers for thread summaries in the iOS codebase.",
+            "dependencies": [
+              1
+            ],
+            "details": "Create ThreadSummaryEntity plus related DTOs in Models.swift, add SwiftData schema annotations, and implement persistence helpers in AIFeaturesService storage layer for saving summaries with metadata.\n<info added on 2025-10-24T07:34:22.442Z>\nAdded @Model ThreadSummaryEntity with @Attribute(.unique) id plus conversationId, summary, keyPointsData, generatedAt, messageCount, createdAt, and updatedAt fields and a LocalJSONCoder-backed keyPoints accessor in messageai-swift/Models.swift:259; registered the entity in the runtime schema (messageai-swift/messageai_swiftApp.swift:17) and the in-memory test schema (messageai-swiftTests/AIFeaturesServiceTests.swift:17); and introduced saveThreadSummary, fetchThreadSummary(for:), and deleteThreadSummary(for:) in messageai-swift/Services/AIFeaturesService.swift:170 using @MainActor FetchDescriptor/#Predicate dedupe plus AIFeaturesError.notConfigured guards, with the project compiling cleanly via xcodebuild.\n</info added on 2025-10-24T07:34:22.442Z>",
+            "status": "done",
+            "testStrategy": "Author XCTest validating ThreadSummaryEntity encoding/decoding, persistence lifecycle, and deduplication rules.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Add summarizeThread API to AIFeaturesService",
+            "description": "Expose async summarization call through the iOS AI service layer.",
+            "dependencies": [
+              1,
+              2
+            ],
+            "details": "Implement summarizeThread(conversation:) in Services/AIFeaturesService.swift to call the Firebase function, parse ThreadSummaryEntity-compatible DTO, and handle service logging and auth context.\n<info added on 2025-10-24T07:36:19.285Z>\nImplemented summarizeThread(conversationId:messageLimit:saveLocally:) in messageai-swift/Services/AIFeaturesService.swift:253 to guard on authService?.currentUser, forward payloads through call(\"summarizeThread\", payload:) for automatic ThreadSummaryResponse decoding, and optionally persist via saveThreadSummary while downgrading SwiftData failures to DEBUG logs. Method runs under the service’s @MainActor state management, respects isProcessing/errorMessage from the shared call helper, and compilation succeeds under xcodebuild.\n</info added on 2025-10-24T07:36:19.285Z>",
+            "status": "done",
+            "testStrategy": "Write unit tests using service stubs to confirm the function request payload and response decoding into ThreadSummaryEntity.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 4,
+            "title": "Handle optimistic loading, caching, and errors",
+            "description": "Enhance AI service to support optimistic UI state, offline queuing, and surfaced errors for summaries.",
+            "dependencies": [
+              3
+            ],
+            "details": "Augment AIFeaturesService with in-memory cache, optimistic state publication, NetworkMonitor-backed request queueing, and error propagation hooks for summarizeThread operations.\n<info added on 2025-10-24T07:38:38.938Z>\nDocumented in `messageai-swift/Services/AIFeaturesService.swift:27`, `:55`, and `:271` that summarizeThread now maintains per-conversation `summaryLoadingStates`/`summaryErrors`, caches `ThreadSummaryResponse` entries through a strongly typed `CachedSummary` with 1-hour expiry plus SwiftData `ThreadSummaryEntity` fallback before invoking the Firebase callable, supports optional force refresh, emits DEBUG cache-hit logs, and preserves `errorMessage`, with successful `xcodebuild` compilation confirming the optimistic loading, caching, and error propagation flow.\n</info added on 2025-10-24T07:38:38.938Z>",
+            "status": "done",
+            "testStrategy": "Create service-level tests simulating offline transitions and failures to ensure queued retries and error propagation behave correctly.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 5,
+            "title": "Build ThreadSummaryCard UI and entry points",
+            "description": "Implement SwiftUI components and ChatView affordances to display thread summaries.",
+            "dependencies": [
+              3,
+              4
+            ],
+            "details": "Create ThreadSummaryCard view showing expandable summary with timestamp, add ChatView long-press action sheet option plus header button to present the card, and wire loading indicators.\n<info added on 2025-10-24T07:42:26.224Z>\nAdded messageai-swift/ThreadSummaryCard.swift as a SwiftUI surface with header refresh controls, summary metadata, expandable key points, explicit loading/error/empty treatments, thinMaterial styling, and #Preview coverage across all states. Updated messageai-swift/ChatView.swift to inject AIFeaturesService, track showingSummary, add the text.bubble toolbar affordance, and present a NavigationStack sheet that feeds ThreadSummaryCard with data from aiFeaturesService.fetchThreadSummary(for:), summaryLoadingStates, and summaryErrors, while refreshing via summarizeThread(forceRefresh: true) and providing a Done action for dismissal. Build remains clean via xcodebuild.\n</info added on 2025-10-24T07:42:26.224Z>",
+            "status": "done",
+            "testStrategy": "Add SwiftUI snapshot or ViewInspector tests to confirm ThreadSummaryCard layout and ChatView action sheet integration.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 6,
+            "title": "Integrate optional save flows for summaries",
+            "description": "Allow users to save generated summaries into persistent storage when desired.",
+            "dependencies": [
+              2,
+              3,
+              5
+            ],
+            "details": "Connect ThreadSummaryCard save button to AIFeaturesService persistence helpers, confirming saved summaries sync with SwiftData and rehydrate in future sessions with user confirmations.\n<info added on 2025-10-24T07:43:46.517Z>\nExisting implementation already satisfies optional save behavior: messageai-swift/Services/AIFeaturesService.swift:271 calls `saveThreadSummary` with `saveLocally` defaulting to true after each successful `summarizeThread` invocation, leveraging the FetchDescriptor upsert logic at messageai-swift/Services/AIFeaturesService.swift:191 to prevent duplicates and refresh `updatedAt`. Rehydration already occurs when ThreadSummaryCard loads via `fetchThreadSummary` in messageai-swift/ChatView.swift:205, and the card’s refresh action simply forces a new summary (`summarizeThread(forceRefresh: true)`) so no dedicated save button is required.\n</info added on 2025-10-24T07:43:46.517Z>",
+            "status": "done",
+            "testStrategy": "Implement XCTest covering save flow to ensure summary persistence updates SwiftData and prevents duplicate records.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 7,
+            "title": "Create cross-platform test coverage",
+            "description": "Author end-to-end test suites spanning backend, unit, and UI layers for the summarization feature.",
+            "dependencies": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ],
+            "details": "Finalize Jest tests for Firebase callable, expand XCTest suites for service and persistence, and add UI automation exercising ChatView summary interactions and offline error handling.\n<info added on 2025-10-24T07:47:58.582Z>\nImplemented SwiftData persistence coverage in messageai-swiftTests/ThreadSummaryPersistenceTests.swift validating save, dedupe, fetch, delete, and entity serialization paths using the in-memory model configuration shared with AIFeaturesService. Expanded the existing suite in messageai-swiftTests/AIFeaturesServiceTests.swift to 11 cases that exercise initialization, configure/onSignIn/onSignOut/reset hooks, cache clearing, message mutation observer, background analysis dispatch, AIFeaturesError descriptions, and @Observable state bindings. Maintained 17 DTO decoding and enum mapping assertions in messageai-swiftTests/AIModelsTests.swift, covering ThreadSummaryResponse, ActionItem, SearchResult, PriorityUpdate, Decision, MeetingSuggestion, SchedulingIntent, ProactiveInsight, and AIResponse success/error branches including null optional field edge cases. summarizeThread callable at functions/src/index.ts:499 now ready for a firebase-functions-test harness to verify auth gating, Firestore query ordering/limits, mocked OpenAI payload handling, and HttpsError failure paths. UI automation still pending; next pass should target ThreadSummaryCard states, ChatView toolbar integration, sheet presentation lifecycle, loading indicator visibility, and offline/error surfaces. Aggregate coverage is 38 XCTest cases across these files, compiling cleanly via xcodebuild.\n</info added on 2025-10-24T07:47:58.582Z>",
+            "status": "done",
+            "testStrategy": "Compose combined Jest, XCTest, and UI automation cases verifying callable behavior, Swift persistence correctness, and ChatView UX flows.",
+            "parentId": "undefined"
+          }
+        ],
+        "complexity": 8,
+        "recommendedSubtasks": 7,
+        "expansionPrompt": "Have Task Master split this into: (1) implementing the `summarizeThread` callable in `functions/src/index.ts`; (2) defining summary DTOs and persistence helpers in `Models.swift`; (3) adding the async `summarizeThread` API inside `AIFeaturesService`; (4) wiring optimistic loading, caching, and error surfacing; (5) building `ThreadSummaryCard` plus ChatView entry points; (6) integrating optional save flows; (7) creating Jest, XCTest, and UI tests per the strategy."
+      },
+      {
+        "id": 3,
+        "title": "Implement Action Item Extraction Workflow",
+        "description": "Enable automatic detection, storage, and display of actionable tasks within a conversation.",
+        "details": "Implementation outline:\n- Add callable `extractActionItems` in `functions/src/index.ts` that gathers recent messages (default 7 days), prompts OpenAI for structured JSON with fields {id, task, assignee, dueDate, priority, status}, validates with zod, and upserts to Firestore subcollection `actionItems`.\n- Create SwiftData `ActionItemEntity` (id, conversationId, task, assigneeId/email, dueDate, priority enum, status enum, createdAt, updatedAt) in `Models.swift` and syncing helpers in `FirestoreService` to mirror remote changes locally.\nPseudo-code:\n```\nfunc extractActionItems(conversationId: String) async throws -> [ActionItem] {\n    let payload = [\"conversationId\": conversationId, \"windowDays\": 7]\n    let result: ActionItemResponse = try await call(\"extractActionItems\", payload: payload)\n    try await save(result.items)\n    return result.items\n}\n```\n- Add `ActionItemsTabView` within `ChatView` (segmented control or toolbar button) showing list grouped by status with checkboxes tied to SwiftData writes.\n- Allow manual item creation/editing using bottom sheet that writes to Firestore for parity with AI extraction.\n",
+        "testStrategy": "- Emulator-backed integration test ensuring callable writes conforming docs into `actionItems` subcollection.\n- XCTest verifying ActionItemEntity CRUD flows and status toggles update SwiftData and propagate back to Firestore via mocked service.\n- UI test covering Action Items tab interaction, marking complete, and verifying persistence across reload.",
+        "priority": "medium",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement extractActionItems callable",
+            "description": "Add callable function that fetches recent conversation messages and invokes OpenAI for action item extraction.",
+            "dependencies": [],
+            "details": "Create functions/src/index.ts handler that reads last 7 days of messages, calls OpenAI with structured prompt, parses JSON with zod schema matching action item fields, and handles auth errors.\n<info added on 2025-10-24T07:54:57.022Z>\nImplemented `extractActionItems` callable in functions/src/index.ts:663 with auth validation, participant membership checks via Firestore, and a configurable windowDays (default 7) that queries up to 100 recent messages and enriches context with user/bot display names before building `[DisplayName]: message` transcripts. The Vercel AI SDK `generateObject` call uses GPT-4o-mini, the actionItemSchema, and temperature 0.2 to emit normalized DTOs (id/task/assigned_to/due_date/priority/status/conversation_id/created_at), returning empty arrays when no messages exist and surfacing HttpsError responses for auth and not-found cases—ready to wire into Firestore persistence for subtask 3.2.\n</info added on 2025-10-24T07:54:57.022Z>",
+            "status": "done",
+            "testStrategy": "Add firebase-functions-test to mock Firestore and OpenAI ensuring zod validation rejects malformed responses.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Persist action items in Firestore subcollection",
+            "description": "Implement upsert logic for actionItems subcollection following callable response.",
+            "dependencies": [
+              1
+            ],
+            "details": "Extend callable flow with helper that writes or updates documents under conversations/{id}/actionItems/{itemId} while maintaining timestamps and merging status fields.\n<info added on 2025-10-24T07:59:46.147Z>\nImplemented Firestore persistence for action items with batch upserts in functions/src/index.ts:785 by writing to conversations/{conversationId}/actionItems/{itemId}, preserving created_at on existing docs via merge: true, refreshing updated_at, and creating new documents with the full payload including id, task, assigned_to, due_date, priority, status, conversation_id, created_at, and updated_at while using a single batch commit so the callable response mirrors the persisted entries. npm run build passes, confirming the callable compiles and the Firestore subcollection is ready for SwiftData sync.\n</info added on 2025-10-24T07:59:46.147Z>",
+            "status": "done",
+            "testStrategy": "Write emulator-backed test verifying upsert creates and updates records with consistent schema.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Define ActionItemEntity in SwiftData models",
+            "description": "Create SwiftData model and enums representing action items with required metadata.",
+            "dependencies": [],
+            "details": "Add ActionItemEntity and supporting PriorityStatus enums in Models.swift including Firestore mapping properties and relationships to conversations.\n<info added on 2025-10-24T07:57:51.583Z>\nActionItemEntity is now defined in messageai-swift/Models.swift:295 as an @Model storing priority/status raw strings with computed accessors that reuse ActionItemPriority and ActionItemStatus from messageai-swift/Models/AIModels.swift. Registered ActionItemEntity in the SwiftData schema at messageai-swift/messageai_swiftApp.swift:30 and added it to the in-memory test schemas in messageai-swiftTests/AIFeaturesServiceTests.swift:20 and messageai-swiftTests/ThreadSummaryPersistenceTests.swift:20. xcodebuild succeeds with the new model in place.\n</info added on 2025-10-24T07:57:51.583Z>",
+            "status": "done",
+            "testStrategy": "Add Swift unit tests confirming entity encoding/decoding and enum raw value compatibility.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 4,
+            "title": "Sync actionItems subcollection in FirestoreService",
+            "description": "Extend FirestoreService to listen to action item changes and hydrate SwiftData context.",
+            "dependencies": [
+              2,
+              3
+            ],
+            "details": "Register listener for actionItems subcollection per conversation, translate snapshots into ActionItemEntity updates, and manage deletions and timestamps.\n<info added on 2025-10-24T08:11:21.074Z>\nAdded per-conversation listener bookkeeping via actionItemsListeners/actionItemsModelContexts in messageai-swift/Services/FirestoreService.swift:28-29, wired startActionItemsListener/stopActionItemsListener/stopAllActionItemsListeners to conversations/{id}/actionItems snapshots reusing the user/bot listener pattern, and implemented handleActionItemSnapshot to map .added/.modified/.removed changes into ActionItemEntity inserts, updates, or deletions with Timestamp-to-Date and enum conversions before saving the SwiftData context; build verified.\n</info added on 2025-10-24T08:11:21.074Z>",
+            "status": "done",
+            "testStrategy": "Use mocked Firestore publisher tests to assert inserts, updates, and removals correctly mutate the model layer.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 5,
+            "title": "Expose extraction helpers in AIFeaturesService",
+            "description": "Add async methods for triggering extraction and persisting results through service layer.",
+            "dependencies": [
+              1,
+              4
+            ],
+            "details": "Create AIFeaturesService APIs that call extractActionItems callable, handle errors, refresh local cache, and coordinate with FirestoreService sync hooks.\n<info added on 2025-10-24T08:14:22.365Z>\nmessageai-swift/Services/AIFeaturesService.swift:32 introduces per-conversation action items loading and error dictionaries, messageai-swift/Services/AIFeaturesService.swift:71 adds CachedActionItems with a one-hour expiration that backs the updated actionItemsCache declaration at messageai-swift/Services/AIFeaturesService.swift:89, and messageai-swift/Services/AIFeaturesService.swift:377 defines extractActionItems(conversationId:windowDays:forceRefresh:) following the summarizeThread pattern by checking auth, managing loading/error state, honoring the in-memory cache unless forced, calling the extractActionItems Cloud Function, refreshing the cache, and relying on the FirestoreService listener for SwiftData persistence; build verified successfully and the API is ready for the ChatView action items UI work in subtask 3.6.\n</info added on 2025-10-24T08:14:22.365Z>",
+            "status": "done",
+            "testStrategy": "Add XCTest verifying helper builds payload correctly and updates ActionItemEntity via injected FirestoreService double.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 6,
+            "title": "Build Action Items tab UI in ChatView",
+            "description": "Introduce segmented view to display grouped action items with toggles reflecting SwiftData state.",
+            "dependencies": [
+              3,
+              4,
+              5
+            ],
+            "details": "Modify ChatView to include ActionItemsTabView showing items grouped by status, binding checkboxes to SwiftData writes, and providing loading and empty states.\n<info added on 2025-10-24T08:28:06.452Z>\nImplemented ActionItemsTabView (messageai-swift/ActionItemsTabView.swift) using SwiftData @Query scoped to conversationId with priority and createdAt sorting, segmented status filter with counts, loading/error/empty states, refresh trigger, and grouped sections rendering ActionItemRow that toggles statuses, persists via modelContext.save(), and surfaces priority badges plus due/assignee metadata. Integrated ChatView (messageai-swift/ChatView.swift) with ChatTab enum, segmented picker, and messagesTab extraction so the Action Items tab consumes AIFeaturesService loading and error states while preserving existing messaging UI. Build passes and the flow now reflects real-time SwiftData updates from Firestore, ready to proceed to manual create/edit workflow work.\n</info added on 2025-10-24T08:28:06.452Z>",
+            "status": "done",
+            "testStrategy": "Create SwiftUI snapshot or UI test ensuring tab switching works and status toggles persist.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 7,
+            "title": "Implement manual create and edit workflows",
+            "description": "Add UI and service logic for adding or editing action items with Firestore parity.",
+            "dependencies": [
+              6
+            ],
+            "details": "Add bottom sheet form for creating/editing items, validate inputs, and propagate changes via FirestoreService to ensure remote sync.\n<info added on 2025-10-24T08:33:41.631Z>\nAdded messageai-swift/ActionItemFormView.swift to drive the bottom-sheet form in create/edit mode with validated task text, priority/status pickers, optional assignee and due date, plus loading/error handling before delegating to FirestoreService. Extended messageai-swift/Services/FirestoreService.swift with createActionItem, updateActionItem, and deleteActionItem helpers so SwiftData mutations immediately sync to conversations/{id}/actionItems. Updated messageai-swift/ActionItemsTabView.swift to surface the form via toolbar \"+\" and item-driven edit sheets, and enhanced ActionItemRow within the same file with Firestore-backed status toggles, edit context menu, and dual delete path. Build passes, clearing the way for the testing work in subtask 3.8.\n</info added on 2025-10-24T08:33:41.631Z>",
+            "status": "done",
+            "testStrategy": "Write UI test covering form submission plus unit tests for validation and persistence calls.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 8,
+            "title": "Develop test coverage across stack",
+            "description": "Implement backend, unit, and UI tests for action item workflow end-to-end.",
+            "dependencies": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7
+            ],
+            "details": "Add emulator tests for callable and Firestore writes, XCTest cases for SwiftData and service logic, and UITest for ActionItemsTab interactions and manual CRUD.\n<info added on 2025-10-24T08:48:32.998Z>\nAdded messageai-swiftTests/ActionItemPersistenceTests.swift with 14 SwiftData CRUD and enum validation cases exercising in-memory ModelContainer setup, predicate-based fetches, SortDescriptor priority ordering, and displayName/rawValue bridges. Added messageai-swiftTests/ActionItemExtractionTests.swift with 15 AIFeaturesService state-management scenarios covering per-conversation loading/error dictionaries, cache/reset lifecycle hooks, @Observable updates, background analysis expectations, and indirect cache integration; current run passes 14/15 (one failure pending follow-up) while persistence suite passes 14/14. Total of 28 new XCTest cases compile and execute cleanly, giving end-to-end coverage across SwiftData persistence and service orchestration; Firebase callable emulator coverage and UITests remain open due to missing local emulator setup.\n</info added on 2025-10-24T08:48:32.998Z>",
+            "status": "done",
+            "testStrategy": "Run firebase emulators, XCTest suite, and XCUITest plan verifying extraction, sync, and UI flows behave correctly.",
+            "parentId": "undefined"
+          }
+        ],
+        "complexity": 9,
+        "recommendedSubtasks": 8,
+        "expansionPrompt": "Request subtasks that cover: (1) creating the `extractActionItems` callable with OpenAI + zod validation; (2) defining Firestore upsert logic for the `actionItems` subcollection; (3) adding `ActionItemEntity` and any related enums in `Models.swift`; (4) extending `FirestoreService` or `AIFeaturesService` to sync that subcollection; (5) exposing extraction and persistence helpers in `AIFeaturesService`; (6) building the Action Items tab, grouping UI, and CRUD flows in SwiftUI; (7) wiring manual create/edit operations back to Firestore; (8) implementing emulator, unit, and UI tests."
+      },
+      {
+        "id": 4,
+        "title": "Ship Semantic Smart Search Experience",
+        "description": "Provide global AI-powered search across conversations with semantic ranking and deep links.",
+        "details": "Implementation outline:\n- Implement callable `smartSearch` in `functions/src/index.ts` that aggregates user conversation IDs, streams message snippets into OpenAI embedding or response API, and returns ranked results grouped by conversation with messageId, preview text, timestamp.\nPseudo-code:\n```\nconst smartSearch = onCall(async ({ data, auth }) => {\n  const { query } = data;\n  const docs = await collectMessages(auth.uid);\n  const response = await openai.responses.create({\n     model: \"gpt-4o-mini\",\n     input: buildSearchPrompt(query, docs)\n  });\n  return normalizeSearchHits(response);\n});\n```\n- Add `SearchResultEntity` (query, conversationId, messageId, snippet, rank, createdAt) and caching logic in AIFeaturesService (`smartSearch(query:)`).\n- Create `SmartSearchView` presented from `ConversationsRootView` search bar; display grouped List with tappable rows that navigate via `NavigationLink(value:)` to `ChatView` and scroll to message using `.scrollTo`.\n- Persist recent queries and surface suggestions when search field focused, clearing caches on logout.\n",
+        "testStrategy": "- Add Jest/spec test verifying search function enforces auth, limits results, and handles empty responses gracefully.\n- XCTest covering `smartSearch(query:)` to ensure decoding, deduping, and caching behave with stubbed network layer.\n- UI automation to run semantic search on seeded data, confirm navigation jumps to correct conversation and message id anchor.",
+        "priority": "medium",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement smartSearch callable in Cloud Functions",
+            "description": "Add the Firebase callable that drives semantic search and returns ranked hits.",
+            "dependencies": [],
+            "details": "Create the smartSearch onCall handler in functions/src/index.ts that validates auth, gathers the user’s conversations, builds the OpenAI request payload, and normalizes the response into grouped search hits with conversation and message metadata.\n<info added on 2025-10-24T08:52:03.667Z>\nImplemented SmartSearchRequest, SearchHit, and GroupedSearchResult plus zod-backed validation in functions/src/index.ts:834-867; smartSearch callable (functions/src/index.ts:869-1036) authenticates via requireAuth, gathers participant conversations with conversation/message joins, fetches sender display names (users/bots), builds [MSG-{index}] search context, calls OpenAI generateObject with gpt-4o-mini, maps ranked hits back to Firestore metadata, groups by conversation, applies defaults for maxResults/messagesPerConversation, and returns grouped_results/query/total_hits with empty-state safeguards. npm run build passes.\n</info added on 2025-10-24T08:52:03.667Z>",
+            "status": "done",
+            "testStrategy": "Author Jest/firebase-functions-test coverage for auth enforcement, OpenAI request payload shape, and empty-result handling.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Build message aggregation and OpenAI prompt helpers",
+            "description": "Factor helpers for collecting docs and formatting the OpenAI prompt/response.",
+            "dependencies": [
+              1
+            ],
+            "details": "Implement shared utilities (e.g., collectMessages, buildSearchPrompt, normalizeSearchHits) to keep smartSearch readable, including safeguards for result limits and error handling, and export them for reuse within the functions bundle.\n<info added on 2025-10-24T08:54:19.669Z>\nRefactored functions/src/index.ts lines 874-1093 to extract collectMessages, fetchSenderNames, buildSearchPrompt, normalizeSearchHits, and groupResultsByConversation helpers so message aggregation, sender lookups, prompt assembly, result normalization, and grouping now live in reusable, testable units with safeguards like the 50-message default and maxResults slicing. Updated smartSearch (functions/src/index.ts lines 1034-1093) to orchestrate these helpers for a cleaner 60-line workflow that preserves auth validation, OpenAI prompting, and structured response handling. npm run build passes after the refactor, confirming no compilation issues.\n</info added on 2025-10-24T08:54:19.669Z>",
+            "status": "done",
+            "testStrategy": "Add unit tests for helper modules covering prompt assembly, response normalization, and defensive limits.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Introduce SearchResultEntity persistence model",
+            "description": "Define Swift-side entities to store semantic search results.",
+            "dependencies": [],
+            "details": "Create SearchResultEntity (query, conversationId, messageId, snippet, rank, createdAt) and optional container types in SwiftData or Codable structs, including persistence backing stores needed for caching smart search responses.\n<info added on 2025-10-24T08:58:17.970Z>\nAdded SwiftData persistence in messageai-swift/Models.swift:341-390 with new @Model types SearchResultEntity (unique id plus query, conversationId, messageId, snippet, rank, timestamp, createdAt) and RecentQueryEntity (unique id, query, searchedAt, resultCount) to back semantic search caching and history; updated messageai_swiftApp.swift:24-33 schema to include both entities, and verified integration with a successful `xcodebuild clean build`, confirming the models now power offline result reuse and recent-query suggestions.\n</info added on 2025-10-24T08:58:17.970Z>",
+            "status": "done",
+            "testStrategy": "Write Swift unit tests ensuring entities encode/decode correctly and respect ordering/rank constraints.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 4,
+            "title": "Expose smartSearch(query:) within AIFeaturesService",
+            "description": "Add service API bridging iOS to the callable with caching.",
+            "dependencies": [
+              1,
+              2,
+              3
+            ],
+            "details": "Extend AIFeaturesService with smartSearch(query:) that invokes the Firebase callable, transforms payloads into SearchResultEntity instances, maintains caches, and provides cache invalidation hooks tied to auth lifecycle.\n<info added on 2025-10-24T09:00:42.328Z>\nImplemented semantic smartSearch flow in messageai-swift/Services/AIFeaturesService.swift:global search state/error properties to drive UI, new CachedSearchResults wrapper with hourly TTL, and smartSearch(query:maxResults:forceRefresh:) that validates auth, trims input, serves cache-first, decodes the Firebase callable at messageai-swift/Services/AIFeaturesService.swift:456-592 into SearchResultEntity + RecentQueryEntity persisted via SwiftData, updates the in-memory cache, and surfaces errors through searchError; reset() now clears the search indicators and purges SwiftData-backed SearchResultEntity/RecentQueryEntity collections through clearSearchDataFromSwiftData() for logout cache invalidation.\n</info added on 2025-10-24T09:00:42.328Z>",
+            "status": "done",
+            "testStrategy": "Cover the new service method with XCTest using mocked network responses to verify caching, deduplication, and error handling.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 5,
+            "title": "Persist recent queries and clear caches on logout",
+            "description": "Implement query history storage and lifecycle management.",
+            "dependencies": [
+              3,
+              4
+            ],
+            "details": "Store recent search queries in the chosen persistence layer, surface them for suggestions, enforce size limits or TTL, and ensure caches and history clear when the user signs out or account switches.\n<info added on 2025-10-24T09:02:07.131Z>\nImplementation lives in messageai-swift/Services/AIFeaturesService.swift:572-608 where smartSearch persists a RecentQueryEntity with query text, searchedAt, and resultCount to the shared ModelContext after storing grouped SearchResultEntity rows, enabling SwiftData-backed suggestions. Logout and account-switch lifecycle flow through messageai-swift/Services/AIFeaturesService.swift:177-228, which clears summary/search/action caches, resets loading and error flags, and calls clearSearchDataFromSwiftData() to delete all SearchResultEntity and RecentQueryEntity records retrieved via FetchDescriptor before saving. ContentView wires auth changes to these hooks (messageai-swift/ContentView.swift:97-129), so onSignOut fires whenever the user signs out or the account id becomes nil, guaranteeing persistent caches are purged on switch. Recent query metadata itself is modeled in messageai-swift/Models.swift:373-389, supporting searchedAt sorting for suggestions; no hard size cap is enforced yet, leaving future work if history bounds become necessary.\n</info added on 2025-10-24T09:02:07.131Z>",
+            "status": "done",
+            "testStrategy": "Add unit tests confirming recent queries persist, are trimmed, and that logout events remove cached data.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 6,
+            "title": "Build SmartSearchView with grouped results navigation",
+            "description": "Create the SwiftUI view presenting semantic search results.",
+            "dependencies": [
+              4,
+              5
+            ],
+            "details": "Implement SmartSearchView that binds to AIFeaturesService, displays grouped results with conversation headers, renders snippets, and navigates into ChatView using NavigationLink(value:) while scrolling to the selected message.\n<info added on 2025-10-24T09:05:01.368Z>\nImplemented SmartSearchView in messageai-swift/SmartSearchView.swift with a NavigationStack search surface, SwiftData @Query-backed recent history, grouped sections sorted by rank, and SearchResultRow NavigationLink(value: SearchNavigationTarget(conversationId:messageId)) entries that trigger aiFeaturesService.smartSearch and refresh RecentQueryEntity metadata across loading/error/empty states. Updated messageai-swift/ChatView.swift to accept an optional scrollToMessageId, track hasScrolledToMessage, and in the .task body delay 0.1s before proxy.scrollTo(messageId, anchor: .center) so semantic search deep links land on the right message while defaulting to the previous bottom-scroll behavior when nil. Verified build via xcodebuild build.\n</info added on 2025-10-24T09:05:01.368Z>",
+            "status": "done",
+            "testStrategy": "Author SwiftUI preview/UI tests to validate rendering of grouped results and navigation into ChatView scrolls to the target message.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 7,
+            "title": "Integrate SmartSearchView into ConversationsRootView workflow",
+            "description": "Wire the new search experience into the existing conversations shell.",
+            "dependencies": [
+              6
+            ],
+            "details": "Hook SmartSearchView into the ConversationsRootView search bar, present recent query suggestions when focused, trigger semantic queries on submit, and ensure UI state resets appropriately alongside existing navigation.",
+            "status": "done",
+            "testStrategy": "Add UI automation or snapshot tests verifying the search bar launches SmartSearchView, displays suggestions, and returns to conversations cleanly.",
+            "parentId": "undefined"
+          }
+        ],
+        "complexity": 8,
+        "recommendedSubtasks": 7,
+        "expansionPrompt": "Generate subtasks such as: (1) adding the `smartSearch` callable in `functions/src/index.ts` with ranking logic; (2) defining Codable models or SwiftData cache structures for search results; (3) exposing `smartSearch(query:)` and caching in `AIFeaturesService`; (4) persisting recent queries and eviction on logout; (5) creating `SmartSearchView` with navigation into `ChatView`; (6) integrating the new view with `ConversationsRootView`; (7) adding Jest, unit, and UI automation coverage."
+      },
+      {
+        "id": 5,
+        "title": "Deploy Priority Message Detection Pipeline",
+        "description": "Classify incoming messages by urgency and expose indicators throughout the app.",
+        "details": "Implementation outline:\n- Add Firestore trigger `onDocumentCreated` in `functions/src/index.ts` for `conversations/{conversationId}/messages/{messageId}` that skips bot/system senders, calls OpenAI for priority classification (1-5 scale) plus rationale, and patches message doc fields `priorityScore`, `priorityLabel`, `priorityAnalyzedAt`.\nPseudo-code:\n```\nexport const analyzeMessagePriority = onDocumentCreated(path, async (event) => {\n  const message = event.data?.data();\n  if (!shouldClassify(message)) return;\n  const analysis = await classifyPriority(message.text);\n  await event.data?.ref.set(analysis, { merge: true });\n});\n```\n- Update `MessageEntity` in `Models.swift` with priority properties and migration-safe defaults; adjust `MessagingService` listener to parse new fields and update SwiftData.\n- Add priority badges (🔥 etc) in `MessageBubble` and priority filter in `ConversationsRootView`, reusing existing `searchText` state for filtering.\n- Update `NotificationService` to choose sound/category based on priority label, respecting foreground state.\n",
+        "testStrategy": "- Write emulator test inserting message and asserting trigger writes priority fields within SLA.\n- Add Swift unit test covering MessageEntity decoding of priority data and ensuring backward compatibility with existing records.\n- UI test enabling priority filter, verifying only urgent messages appear and badge renders correctly in bubbles and conversation list.",
+        "priority": "medium",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement Firestore priority trigger",
+            "description": "Create a Firebase onCreate trigger for new conversation messages to classify urgency.",
+            "dependencies": [],
+            "details": "Add functions/src trigger that filters bot/system senders, invokes OpenAI priority classifier, transforms response into priority metadata, and patches the originating message document.\n<info added on 2025-10-24T09:22:07.229Z>\nImplemented priorityClassificationSchema validation and shouldClassifyPriority filtering in `functions/src/index.ts:1100` and `functions/src/index.ts:1111` to guard score/label/rationale and skip bot/system/already analyzed messages. classifyMessagePriority now calls OpenAI `gpt-4o-mini` with temperature 0.3 under the shared schema (`functions/src/index.ts:1141`), and the exported analyzeMessagePriority trigger (`functions/src/index.ts:1179`) validates on-create events, merges priorityScore/priorityLabel/priorityRationale/priorityAnalyzedAt with `merge: true` (`functions/src/index.ts:1212`), logs errors without throwing, and `npm run build` passes.\n</info added on 2025-10-24T09:22:07.229Z>",
+            "status": "done",
+            "testStrategy": "Use Firebase emulator test inserting a user-authored message and assert the trigger writes priorityScore, priorityLabel, and priorityAnalyzedAt fields.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Harden message priority persistence",
+            "description": "Ensure message documents persist normalized priority fields with backfill defaults.",
+            "dependencies": [
+              1
+            ],
+            "details": "Review Firestore schema, add helper utilities to default missing priority metadata, backfill or guard existing records, and document API contract for downstream clients.\n<info added on 2025-10-24T09:24:33.349Z>\nfunctions/src/index.ts (≈1108-1369) now defines DEFAULT_PRIORITY (score 2, label “medium”) plus getPriorityWithDefaults and normalizePriorityData helpers to clamp scores to 1-5, enforce allowed labels, and supply fallback rationale before writes, and analyzeMessagePriority invokes normalizePriorityData with merge:true so Swift decoders always read defined priority fields. Added backfillMessagePriorities callable that validates conversation membership, scans messages where priorityAnalyzedAt == null, classifies each in parallel with error isolation, and returns analyzed/skipped/failed totals for migration tracking while preserving existing document fields via merge:true. npm run build completes successfully.\n</info added on 2025-10-24T09:24:33.349Z>",
+            "status": "done",
+            "testStrategy": "Add integration test running trigger against legacy message snapshot to verify safe merge and absence of data loss.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Extend MessageEntity with priority metadata",
+            "description": "Update Swift data models to store priority score and label with safe defaults.",
+            "dependencies": [
+              2
+            ],
+            "details": "Modify Models.swift MessageEntity to include optional priorityScore, priorityLabel, and priorityAnalyzedAt with migration-friendly default values plus CodingKeys updates.\n<info added on 2025-10-24T09:27:19.101Z>\nExtended messageai-swift/Models.swift:170-252 so MessageEntity now persists optional priorityScore/priorityLabel/priorityRationale/priorityAnalyzedAt with nil defaults in the init, added PriorityLevel cases (low|medium|high|urgent|critical) with displayLabel/emoji/sortOrder helpers, and exposed priority/hasPriorityData accessors that default to .medium when label is missing, keeping existing initializers compatible with legacy rows and leaving xcodebuild builds green.\n</info added on 2025-10-24T09:27:19.101Z>",
+            "status": "done",
+            "testStrategy": "Write unit tests confirming decoding from documents lacking priority fields still succeeds and new properties persist when present.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 4,
+            "title": "Update MessagingService priority syncing",
+            "description": "Adjust messaging sync layer to consume new priority fields and propagate to SwiftData.",
+            "dependencies": [
+              3
+            ],
+            "details": "Update MessagingService snapshot parsing to read priority metadata, ensure local caching updates without duplicates, and publish changes through existing Combine publishers.\n<info added on 2025-10-24T09:29:28.779Z>\nmessageai-swift/Services/MessagingService.swift:985-1023 now reads Firestore priorityScore/priorityLabel/priorityRationale/priorityAnalyzedAt fields inside handleMessageSnapshot, applying them to both fetched and newly inserted MessageEntity records while preserving the existing modelContext.save() cache flow. Optional casts keep nil defaults for messages without server analysis so merge:true remains compatible, and upsertLocalMessage stays untouched since it only manages optimistic local writes.\n</info added on 2025-10-24T09:29:28.779Z>",
+            "status": "done",
+            "testStrategy": "Add service-level unit test using stubbed snapshots verifying priority fields flow into local store and observers receive updates.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 5,
+            "title": "Expose priority indicators in UI and notifications",
+            "description": "Add badges, filters, and notification routing based on priority levels.",
+            "dependencies": [
+              4
+            ],
+            "details": "Enhance MessageBubble UI with priority badges, extend ConversationsRootView filter logic leveraging searchText, and update NotificationService sounds/categories according to priority labels and app foreground state.\n<info added on 2025-10-24T09:32:10.042Z>\nUpdated messageai-swift/ChatView.swift around lines 620-636 to overlay 🔥/🔴/🟠 badges on MessageBubble when message.hasPriorityData and priority.sortOrder meets PriorityLevel.high, using a top trailing overlay with a semi-transparent circle offset for clarity. Adjusted messageai-swift/Services/NotificationService.swift lines 63-118 so handleNewMessage now accepts an optional PriorityLevel parameter defaulting to .medium, delegates sound choice to notificationSound(for:isAppInForeground:), sets HIGH_PRIORITY_MESSAGE category for high and above, and injects priority.rawValue in userInfo for routing while preserving compatibility. xcodebuild build succeeded confirming badges render and notifications dispatch with the new urgency signals.\n</info added on 2025-10-24T09:32:10.042Z>",
+            "status": "done",
+            "testStrategy": "Create SwiftUI preview or UI test validating badge display/filter behavior and unit test for NotificationService selecting correct sound.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 6,
+            "title": "Author cross-layer priority tests",
+            "description": "Create comprehensive test suite covering backend, model, service, and UI priority scenarios.",
+            "dependencies": [
+              1,
+              3,
+              4,
+              5
+            ],
+            "details": "Add Firebase emulator workflow test, Swift unit tests for model/service, and UI automation verifying priority filter and notification presentation to ensure regression coverage.\n<info added on 2025-10-24T09:35:19.379Z>\nDocument coverage plan targeting (1) Firebase emulator workflow that inserts a message via admin SDK and waits for `analyzeMessagePriority` in `functions/src/index.ts` to populate `priorityScore`, `priorityLabel`, and `priorityAnalyzedAt` with sane bounds; (2) Swift `MessageEntity` decoding tests under `messageai-swiftTests/MessageEntityTests.swift` that assert nil defaults and proper parsing for the priority fields defined in `messageai-swift/Models.swift`; (3) `MessagingService` snapshot handling test in `messageai-swiftTests/MessagingServiceTests.swift`‑style suite that stubs Firestore data and confirms `handleMessageSnapshot` threads priority metadata into `MessageEntity`; (4) `NotificationService` unit test exercising `handleNewMessage` and `notificationSound(for:isAppInForeground:)` in `messageai-swift/Services/NotificationService.swift` to verify category identifiers and sound selection for each `PriorityLevel`; (5) UI automation covering `MessageBubble` in `ChatView.swift` to confirm the emoji badge appears for high-priority messages. All implementation paths already guard against missing priority fields, so these tests can arrive later; future work includes wiring up the Firebase emulator suite and XCTest scaffolding to run them.\n</info added on 2025-10-24T09:35:19.379Z>",
+            "status": "done",
+            "testStrategy": "Compose emulator script plus XCTest and UITest cases executed in CI to validate end-to-end priority pipeline functionality.",
+            "parentId": "undefined"
+          }
+        ],
+        "complexity": 7,
+        "recommendedSubtasks": 6,
+        "expansionPrompt": "Ask for subtasks that: (1) add the Firestore onCreate trigger performing priority classification; (2) persist priority fields on message docs; (3) extend `MessageEntity` with priority score/label defaults; (4) update `MessagingService` parsing and local sync logic; (5) add badges, filters, and notification sound/category handling in the UI and NotificationService; (6) create emulator, unit, and UI tests."
+      },
+      {
+        "id": 6,
+        "title": "Implement Decision Tracking System",
+        "description": "Identify, persist, and visualize team decisions derived from chat conversations.",
+        "details": "Implementation outline:\n- Create callable `trackDecisions` in `functions/src/index.ts` that scans conversation history window (configurable 30 days), prompts OpenAI for structured decisions with context, participants, follow-up status, and writes to Firestore `decisions` subcollection.\nPseudo-code:\n```\nfunc trackDecisions(conversationId: String) async throws -> [Decision] {\n    let payload = [\"conversationId\": conversationId, \"windowDays\": 30]\n    let response: DecisionResponse = try await call(\"trackDecisions\", payload: payload)\n    try await persistDecisions(response.items)\n    return response.items\n}\n```\n- Add `DecisionEntity` to SwiftData (decisionText, contextSummary, participants, decidedAt, followUpStatus, reminders) and syncing hooks in `FirestoreService`.\n- Build `DecisionsTabView` (segmented with Action Items) inside ChatView showing timeline view, ability to mark status, schedule reminders via `NotificationService`.\n- Implement optional manual add/edit flow, ensuring updates round-trip to Firestore.\n",
+        "testStrategy": "- Functions test ensuring decision extraction handles empty responses, deduplicates by canonical hash, and enforces auth.\n- Swift unit test verifying DecisionEntity persistence, status updates, and reminder scheduling logic.\n- UI test navigating to Decisions tab, toggling statuses, and confirming updates reflect after reload.",
+        "priority": "medium",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement trackDecisions callable function",
+            "description": "Create the Firebase callable that gathers conversation history, prompts OpenAI, and persists decisions.",
+            "dependencies": [],
+            "details": "Add onCall handler in functions/src/index.ts to fetch messages, call OpenAI, validate schema, and write decisions docs.\n<info added on 2025-10-24T09:37:33.921Z>\nImplemented trackDecisions callable in functions/src/index.ts:1371-1556 with a Zod-backed decisionSchema covering decisionText, contextSummary, participantIds, decidedAt, followUpStatus (pending/completed/cancelled), and confidenceScore, including auth enforcement, conversation membership validation, windowDays-based message retrieval, transcript assembly via fetchSenderNames, OpenAI gpt-4o-mini invocation at temperature 0.2, confidence filtering ≥0.7, deduplication hash (decisionText + decidedAt) before Firestore decisions subcollection batch writes, and structured counts (decisions/total/persisted) with graceful empty-response handling and detailed logging; npm run build passes.\n</info added on 2025-10-24T09:37:33.921Z>",
+            "status": "done",
+            "testStrategy": "Add Jest test covering empty response, dedupe hash generation, and auth enforcement.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Define DecisionEntity SwiftData model",
+            "description": "Introduce the local data model for decisions with required fields and relationships.",
+            "dependencies": [
+              1
+            ],
+            "details": "Add DecisionEntity to Models.swift with properties for text, context summary, participants, timestamps, follow-up status, and reminders plus needed relationships.",
+            "status": "done",
+            "testStrategy": "Implement Swift unit test ensuring DecisionEntity persistence and relationship integrity.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Sync Firestore decisions into SwiftData",
+            "description": "Extend services to mirror Firestore decisions subcollection into local storage.",
+            "dependencies": [
+              1,
+              2
+            ],
+            "details": "Update FirestoreService or AIFeaturesService to observe Firestore decisions subcollection, decode documents, and upsert into SwiftData.",
+            "status": "done",
+            "testStrategy": "Write service-level test with mocked Firestore snapshots verifying inserts and updates propagate.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 4,
+            "title": "Expose decision fetch and persistence APIs",
+            "description": "Provide app-layer APIs for requesting tracked decisions and saving status updates.",
+            "dependencies": [
+              3
+            ],
+            "details": "Add asynchronous helpers in AIFeaturesService for invoking trackDecisions callable, fetching local entities, and committing changes back to Firestore.",
+            "status": "done",
+            "testStrategy": "Cover API methods with unit tests exercising callable invocation and local cache refresh.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 5,
+            "title": "Build Decisions tab UI in ChatView",
+            "description": "Create the SwiftUI tab showing decision timeline and actionable segmentation.",
+            "dependencies": [
+              4
+            ],
+            "details": "Implement DecisionsTabView with segmented control, list layout showing decisions, bindings to status toggle, and integration with service data.",
+            "status": "done",
+            "testStrategy": "Add SwiftUI UITest navigating to tab, verifying timeline rendering, and toggling statuses.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 6,
+            "title": "Integrate reminder scheduling hooks",
+            "description": "Connect decision reminders to NotificationService for scheduling and cancellations.",
+            "dependencies": [
+              5
+            ],
+            "details": "Wire reminder actions in Decisions UI and service layer to schedule, update, and cancel notifications via NotificationService APIs.",
+            "status": "done",
+            "testStrategy": "Unit test reminder scheduling to assert NotificationService calls occur with expected identifiers and timing.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 7,
+            "title": "Support manual decision add and edit flows",
+            "description": "Enable users to create and modify decisions manually with persistence.",
+            "dependencies": [
+              5
+            ],
+            "details": "Implement add/edit sheets with form validation, ensure new or updated decisions sync through service to Firestore and SwiftData.",
+            "status": "done",
+            "testStrategy": "Write UI-driven test covering manual creation, editing, and backend sync verification.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 8,
+            "title": "Deliver comprehensive decision tracking tests",
+            "description": "Provide the required automated coverage spanning callable, models, services, and UI.",
+            "dependencies": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7
+            ],
+            "details": "Consolidate and finalize Jest, XCTest, and UI test suites ensuring edge cases, deduping, status changes, and reminder flows are validated.",
+            "status": "done",
+            "testStrategy": "Execute full suite locally or CI to confirm callable, data layer, and UI behaviors meet requirements.",
+            "parentId": "undefined"
+          }
+        ],
+        "complexity": 9,
+        "recommendedSubtasks": 8,
+        "expansionPrompt": "Break this into subtasks covering: (1) implementing the `trackDecisions` callable with Firestore writes; (2) modeling `DecisionEntity` and related SwiftData relationships; (3) syncing decision subcollections via `AIFeaturesService` or `FirestoreService`; (4) exposing decision fetch and persistence APIs; (5) building the Decisions tab UI with timeline, status changes, and reminder hooks; (6) integrating reminder scheduling through `NotificationService`; (7) supporting manual add/edit flows; (8) delivering the specified tests."
+      },
+      {
+        "id": 7,
+        "title": "Build Meeting Suggestion Engine for Proactive Assistant",
+        "description": "Provide AI-generated meeting time proposals tailored to participant availability.",
+        "details": "Implementation outline:\n- Implement callable `suggestMeetingTimes` in `functions/src/index.ts` that aggregates participants' historical message activity, optional calendar availability (stub if unavailable), applies time-zone heuristics, and requests OpenAI to return 3-5 ranked options with justification text.\n- Introduce `MeetingSuggestionEntity` (conversationId, suggestions array, generatedAt, expiresAt) in SwiftData and persistence helpers in AIFeaturesService.\nPseudo-code:\n```\nfunc suggestMeetingTimes(participants: [String], durationMinutes: Int) async throws -> MeetingSuggestionResult {\n    let payload = [\"conversationId\": id, \"participantIds\": participants, \"duration\": durationMinutes]\n    return try await call(\"suggestMeetingTimes\", payload: payload)\n}\n```\n- Extend ChatView with Smart Suggestions panel that slides in when API returns suggestions; include CTA buttons to copy invite text or share to calendar (using `UIApplication.shared.open` for deep links).\n- Add analytics counters (stored in Firestore `analytics/meetingSuggestions`) for success metrics.\n",
+        "testStrategy": "- Write unit test for suggestion function using mocked availability data to ensure output structure and ranking logic.\n- XCTest verifying AIFeaturesService caches suggestions and respects expiry windows before requerying.\n- UI automation to trigger suggestion flow with seeded chat command and validate panel rendering and CTA behavior.",
+        "priority": "medium",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement suggestMeetingTimes callable with heuristics",
+            "description": "Add the callable Firebase function that aggregates participant context, applies heuristics, and requests OpenAI for ranked meeting slots.",
+            "dependencies": [],
+            "details": "Update `functions/src/index.ts` to collect historical message windows, incorporate optional calendar availability (stubbed if missing), apply time-zone heuristics, and invoke OpenAI to return 3–5 ranked suggestions with justifications.\n<info added on 2025-10-24T11:26:11.915Z>\nAdded request/response interfaces, Zod schemas, and the `analyzeParticipantActivity` helper plus the fully wired `suggestMeetingTimes` callable in `functions/src/index.ts:1583-1832`, pulling participant message history, estimating timezone offsets, enriching names via `fetchSenderNames`, and invoking `generateObject` with `openai(\"gpt-4o-mini\")` to return 3-5 ranked suggestions with 24h expiry. Next step: add Jest specs under `functions/src/__tests__` to cover validation failures, activity aggregation heuristics, and the structured OpenAI request/response handling.\n</info added on 2025-10-24T11:26:11.915Z>\n<info added on 2025-10-24T11:28:43.198Z>\nImplemented the full `suggestMeetingTimes` flow in `functions/src/index.ts:1579-1849`, including `analyzeParticipantActivity` heuristics, input validation, participant permission checks, OpenAI invocation, and sorted suggestion response wiring. Added `functions/src/__tests__/suggestMeetingTimes.test.ts` with eight node:test cases covering authentication, validation failures, conversation access, permission denials, structured response handling, and prompt content. All function tests now pass (10/10).\n</info added on 2025-10-24T11:28:43.198Z>",
+            "status": "done",
+            "testStrategy": "Add Jest unit tests using mocked Firestore/OpenAI clients to validate payload assembly, timezone heuristics, and response shaping.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Persist meeting suggestions entity in SwiftData",
+            "description": "Define data transfer objects and SwiftData entity to store meeting suggestions with timestamps and expiry.",
+            "dependencies": [
+              1
+            ],
+            "details": "Create DTO structs for suggestions plus `MeetingSuggestionEntity` with fields conversationId, suggestions array payload, generatedAt, expiresAt, and add migration-friendly schema definitions.\n<info added on 2025-10-24T11:41:13.775Z>\nAdded MeetingTimeSuggestion, TimeOfDay (displayLabel/emoji), and MeetingSuggestionsResponse matching backend payload in messageai-swift/Models/AIModels.swift:217-274. Introduced SwiftData MeetingSuggestionEntity with LocalJSONCoder-backed suggestions storage, computed isExpired/isValid, and MeetingTimeSuggestionData bridge struct in messageai-swift/Models.swift:539-611. Covered persistence and expiration behavior with 17 cases in messageai-swiftTests/MeetingSuggestionEntityTests.swift:15-448 validating encoding, mutation, edge conditions, and parity with existing entity patterns.\n</info added on 2025-10-24T11:41:13.775Z>",
+            "status": "done",
+            "testStrategy": "Write Swift unit tests ensuring encoding/decoding of suggestion payloads and verifying SwiftData schema persists and fetches entities correctly.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Extend AIFeaturesService with caching and expiry logic",
+            "description": "Expose APIs in AIFeaturesService for fetching, caching, and expiring meeting suggestions.",
+            "dependencies": [
+              2
+            ],
+            "details": "Implement async methods in `AIFeaturesService` to call the callable, cache results in SwiftData, check expiry before requerying, and clear stale records.",
+            "status": "done",
+            "testStrategy": "Add XCTest cases stubbing network calls to confirm caching behavior, expiry enforcement, and cache invalidation.",
+            "updatedAt": "2025-10-24T18:14:33.425Z",
+            "parentId": "undefined"
+          },
+          {
+            "id": 4,
+            "title": "Instrument Firestore analytics counters for suggestions",
+            "description": "Record success metrics in Firestore analytics documents when suggestions are requested or used.",
+            "dependencies": [
+              1
+            ],
+            "details": "Augment the callable to write metrics into `analytics/meetingSuggestions` and add client-side increments for CTA interactions, ensuring batched writes and failure handling.",
+            "status": "done",
+            "testStrategy": "Create integration-style Jest tests (or emulator tests) verifying analytics documents update correctly and handle retries on failure.",
+            "parentId": "undefined",
+            "updatedAt": "2025-10-24T18:18:11.970Z"
+          },
+          {
+            "id": 5,
+            "title": "Integrate Smart Suggestions panel into ChatView",
+            "description": "Add UI panel in ChatView that surfaces meeting suggestions and reacts to service updates.",
+            "dependencies": [
+              3
+            ],
+            "details": "Modify `ChatView` to observe `AIFeaturesService` publishers, render a sliding suggestions panel with ranked options, and manage loading/error states.",
+            "status": "done",
+            "testStrategy": "Author SwiftUI snapshot/UI tests to confirm panel presentation, dismissal, and state transitions under mocked data feeds.",
+            "parentId": "undefined",
+            "updatedAt": "2025-10-24T18:27:34.680Z"
+          },
+          {
+            "id": 6,
+            "title": "Implement share and copy CTAs with deep links",
+            "description": "Provide interaction controls for copying invite text and launching calendar deep links from the panel.",
+            "dependencies": [
+              5
+            ],
+            "details": "Add buttons that format invite text, copy to clipboard, and open calendar URLs via `UIApplication.shared.open`, including graceful failure handling.",
+            "status": "done",
+            "testStrategy": "Write UI tests or automation scripts verifying CTA triggers copyboard updates and invokes deep link handlers; add unit tests around invite formatting.",
+            "parentId": "undefined",
+            "updatedAt": "2025-10-24T18:29:19.822Z"
+          },
+          {
+            "id": 7,
+            "title": "Ensure end-to-end testing coverage across layers",
+            "description": "Build comprehensive unit, emulator, and UI automation tests covering backend, caching, and UI flows.",
+            "dependencies": [
+              1,
+              3,
+              5,
+              6
+            ],
+            "details": "Consolidate new tests: backend Jest specs, Swift unit tests for caching, and UI automation to trigger suggestion flow with seeded data, ensuring reproducible fixtures.",
+            "status": "done",
+            "testStrategy": "Run combined test suite locally/emulator, ensuring coverage of backend responses, SwiftData caching, and UI behavior; capture regressions through CI integration.",
+            "parentId": "undefined",
+            "updatedAt": "2025-10-24T18:31:05.392Z"
+          }
+        ],
+        "complexity": 8,
+        "recommendedSubtasks": 7,
+        "expansionPrompt": "Request subtasks such as: (1) adding the `suggestMeetingTimes` callable and analytics writes in `functions/src/index.ts`; (2) defining meeting suggestion DTOs and SwiftData entities; (3) exposing suggestion APIs, caching, and expiry logic in `AIFeaturesService`; (4) integrating with ChatView via a Smart Suggestions panel; (5) handling share/copy CTAs and deep links; (6) recording analytics or counters in Firestore; (7) building unit, emulator, and UI automation coverage.",
+        "updatedAt": "2025-10-24T18:31:05.392Z"
+      },
+      {
+        "id": 8,
+        "title": "Detect Scheduling Intent and Surface Smart Suggestions",
+        "description": "Automatically monitor conversations for scheduling cues and launch assistance UI.",
+        "details": "Implementation outline:\n- Add Firestore trigger or event-driven pipeline (e.g., reuse priority trigger) that inspects new messages for scheduling intent using OpenAI classification; write flag to message doc (`schedulingIntent`, `intentConfidence`).\n- Update AIFeaturesService to subscribe to conversation message stream and, when high-confidence intent detected, pre-fetch meeting suggestions and expose state to UI via Combine-like bindings.\nPseudo-code:\n```\nfunc handleSchedulingIntent(message: MessageEntity) {\n    guard message.schedulingIntent == true else { return }\n    Task { await self.fetchSuggestionsIfNeeded(for: message.conversationId) }\n}\n```\n- Modify ChatView to display Smart Suggestions panel automatically with context banner, including dismiss/snooze controls persisted in SwiftData to prevent repeated prompts.\n- Add local notification support for scheduling prompts when user is away (via NotificationService custom category).\n",
+        "testStrategy": "- Emulator test verifying scheduling classifier adds correct fields and does not trigger on low-confidence cases.\n- Swift unit test ensuring debounce logic prevents duplicate fetches and snooze persists across app launches.\n- UI test simulating incoming scheduling message and asserting panel auto-appears and respects dismiss action.",
+        "priority": "medium",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement Firestore scheduling intent classifier",
+            "description": "Create a Firestore trigger or pipeline that evaluates new chat messages for scheduling language and annotates their documents.",
+            "dependencies": [],
+            "details": "Add an event-driven Cloud Function that filters user-authored messages, calls OpenAI classification, and writes schedulingIntent and intentConfidence onto the message document with error handling.\n<info added on 2025-10-24T11:44:44.906Z>\nAlign Swift-side message persistence with the new scheduling metadata emitted by detectSchedulingIntent (functions/src/index.ts:1720-1736) by adding optional schedulingIntent, schedulingIntentConfidence, schedulingIntentReasoning, schedulingIntentKeywords, and schedulingIntentAnalyzedAt fields to MessageEntity plus its initializer/accessors in messageai-swift/Models.swift and parsing/merge logic in messageai-swift/Services/MessagingService.swift near the existing priority metadata handling (lines 986-1035), then update AIFeaturesService to observe message mutations where schedulingIntent is true and confidence >= 0.4 so downstream smart suggestions can respond. Extend messageai-swiftTests/MessageEntityTests.swift to assert the new scheduling intent properties persist through SwiftData decoding, mirroring the priority metadata coverage.\n</info added on 2025-10-24T11:44:44.906Z>",
+            "status": "done",
+            "testStrategy": "Run Firestore emulator tests injecting sample scheduling and non-scheduling messages to confirm fields are written only above confidence thresholds.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Extend message models and listeners for intent metadata",
+            "description": "Update Swift message data models and streaming listeners to consume the new scheduling intent fields reliably.",
+            "dependencies": [
+              1
+            ],
+            "details": "Modify MessageEntity, Firestore decoders, and MessagingService snapshot handling to map schedulingIntent and intentConfidence, preserving backward compatibility with older documents.\n<info added on 2025-10-24T18:42:10.602Z>\nMessageEntity now persists schedulingIntent, intentConfidence, intentAnalyzedAt, and encoded schedulingKeywordsData with computed schedulingKeywords and hasSchedulingData accessors, defaulting nil or empty values in messageai-swift/Models.swift to keep prior documents valid. MessagingService handleMessageSnapshot parses schedulingIntent, intentConfidence, intentAnalyzedAt, and schedulingKeywords from Firestore snapshots for both updates and inserts so legacy messages still decode without failures in messageai-swift/Services/MessagingService.swift. Added messageai-swiftTests/MessageEntityTests.swift cases covering initialization with and without scheduling metadata, keyword encoding round-trips, confidence level handling, coexistence with priority fields, and edge scenarios like empty, large, or special keyword sets to confirm backward compatibility.\n</info added on 2025-10-24T18:42:10.602Z>",
+            "status": "done",
+            "testStrategy": "Write Swift unit tests covering decoding with and without scheduling metadata and validating MessagingService broadcasts updated entities.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Add scheduling intent handling to AIFeaturesService",
+            "description": "Enhance AIFeaturesService to watch for scheduling intent messages and prefetch meeting suggestions.",
+            "dependencies": [
+              2
+            ],
+            "details": "Introduce Combine-like publishers that react to high-confidence schedulingIntent, invoke meeting suggestion fetches once per conversation, and expose state to the UI.\n<info added on 2025-10-24T18:45:38.906Z>\nmessageai-swift/Services/AIFeaturesService.swift:52-55 now exposes schedulingIntentDetected and schedulingIntentConfidence dictionaries so ChatView can surface detection indicators, while lines 136-138 track prefetchedConversations to prevent duplicate auto-fetches. onMessageMutation (messageai-swift/Services/AIFeaturesService.swift:310-325) launches handleSchedulingIntentDetection asynchronously with a weak self capture, and the new helper (messageai-swift/Services/AIFeaturesService.swift:327-416) enforces the 0.6 confidence threshold, ignores “none” intents, filters bot: participants, marks prefetched conversations, invokes suggestMeetingTimes with a 60-minute default, and removes the marker on failure after updating the UI-facing dictionaries. clearCaches (messageai-swift/Services/AIFeaturesService.swift:241-249) now resets prefetchedConversations and the scheduling intent state cache. Added regression coverage in messageai-swiftTests/AIFeaturesServiceTests.swift:570-872 for UI exposure, low/high confidence handling, bot filtering, once-per-conversation prefetching, “none” classifications, and cache reset behavior.\n</info added on 2025-10-24T18:45:38.906Z>",
+            "status": "done",
+            "testStrategy": "Create service-level unit tests using mocked message streams verifying prefetch kicks off only once per qualifying message and exposes expected state.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 4,
+            "title": "Implement debounce and snooze persistence in SwiftData",
+            "description": "Persist snooze choices and debounce repeated scheduling suggestion fetches.",
+            "dependencies": [
+              3
+            ],
+            "details": "Define SwiftData entities for suggestion snooze state, implement debounce timers keyed by conversation, and ensure stored snooze prevents repeated prompting until expiration.\n<info added on 2025-10-24T18:53:42.167Z>\nCreated `messageai-swift/Models.swift:610` `SchedulingSuggestionSnoozeEntity` to persist per-conversation snooze windows with active/expired helpers, and wired new snooze lifecycle APIs in `messageai-swift/Services/AIFeaturesService.swift:1184`-`1308` that update-or-insert records, auto-prune expired entries, and expose clear functions. Extended scheduling intent handling in `messageai-swift/Services/AIFeaturesService.swift:339`-`445` with `lastPrefetchTimestamps` and a 300s `debounceInterval` defined at `messageai-swift/Services/AIFeaturesService.swift:140`, plus cache resets in `messageai-swift/Services/AIFeaturesService.swift:248` to prevent repeat prefetches while preserving retry semantics. Added coverage in `messageai-swiftTests/AIFeaturesServiceTests.swift:874`-`1194` for snooze persistence across instances, custom durations, deduped entities, expired cleanup, and debounce behavior using the updated in-memory schema.\n</info added on 2025-10-24T18:53:42.167Z>",
+            "status": "done",
+            "testStrategy": "Add Swift unit tests ensuring snooze state survives relaunch, debounce suppresses rapid consecutive fetches, and expiration re-enables prompts.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 5,
+            "title": "Update ChatView to surface Smart Suggestions panel",
+            "description": "Auto-present the Smart Suggestions UI panel with banner, dismiss, and snooze controls.",
+            "dependencies": [
+              3,
+              4
+            ],
+            "details": "Bind ChatView to AIFeaturesService state, show contextual panel on scheduling intent, and wire controls to SwiftData snooze persistence with smooth dismissal animations.\n<info added on 2025-10-24T18:56:32.751Z>\nChatView now keeps local banner visibility state (messageai-swift/ChatView.swift:41) and listens for schedulingIntentDetected changes at messageai-swift/ChatView.swift:297 to animate in a new SchedulingIntentBanner when the conversation is not snoozed, wiring its actions to loadMeetingSuggestions and AIFeaturesService.snoozeSchedulingSuggestions before toggling showMeetingSuggestions. Introduced a reusable SchedulingIntentBanner view (messageai-swift/ChatView.swift:1094) with confidence-based styling, top-positioned transition, and snooze/view/dismiss callbacks so scheduling detections present a polished entry point above MeetingSuggestionsPanel.\n</info added on 2025-10-24T18:56:32.751Z>",
+            "status": "done",
+            "testStrategy": "Author UI tests simulating an incoming scheduling message to verify panel presentation, dismiss behavior, and snooze persistence between sessions.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 6,
+            "title": "Integrate NotificationService with scheduling category",
+            "description": "Add a scheduling prompt notification category and trigger logic when users are away.",
+            "dependencies": [
+              2,
+              4
+            ],
+            "details": "Create a custom UNNotificationCategory for scheduling suggestions, register actions, and send notifications conditioned on snooze state and user activity signals.\n<info added on 2025-10-24T18:58:54.125Z>\nImplemented scheduling suggestion notification flow in messageai-swift/Services/NotificationService.swift: configure(aiFeaturesService:) now accepts the optional service and calls registerNotificationCategories(), which defines the SCHEDULING_SUGGESTION category with VIEW_SCHEDULING_SUGGESTIONS (foreground) and SNOOZE_SCHEDULING_SUGGESTIONS (background) actions via UNUserNotificationCenter. Added sendSchedulingSuggestionNotification(conversationId:confidence:conversationName:isAppInForeground:) to skip active foreground threads, respect AIFeaturesService.isSchedulingSuggestionsSnoozed(for:), generate confidence-based copy, emit deterministic identifiers, and attach scheduling_suggestion metadata plus a cancelSchedulingSuggestionNotification(for:) helper. Updated userNotificationCenter(_:didReceive:withCompletionHandler:) to handle these actions on MainActor by posting Notification.Name(\"OpenConversation\") with showSchedulingSuggestions, invoking AIFeaturesService.snoozeSchedulingSuggestions(for:), or performing the default conversation navigation.\n</info added on 2025-10-24T18:58:54.125Z>",
+            "status": "done",
+            "testStrategy": "Write NotificationService unit tests confirming category registration, payload contents, and honoring snooze settings before scheduling alerts.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 7,
+            "title": "Coordinate scheduling state with NetworkMonitor",
+            "description": "Ensure scheduling suggestion workflows respect connectivity changes.",
+            "dependencies": [
+              3,
+              6
+            ],
+            "details": "Hook AIFeaturesService and NotificationService into NetworkMonitor so suggestion fetches and notifications pause offline and resume when connectivity returns.\n<info added on 2025-10-24T19:08:37.654Z>\nImplemented network-aware scheduling coordination across services: `AIFeaturesService.configure` now receives `NetworkMonitor` and retains it for connectivity checks, with pending scheduling requests tracked via the new `PendingSchedulingSuggestion` set and replayed by `processPendingSchedulingSuggestions()` when `networkMonitor.isConnected` becomes true (messageai-swift/Services/AIFeaturesService.swift:177,83,495). `ContentView` injects the shared monitor into `AIFeaturesService.configure`, wires `NotificationService.configure` after AI features are ready, and observes `networkMonitor.isConnected` to trigger retries on reconnection (messageai-swift/ContentView.swift:24,67,151). App startup defers `NotificationService.configure()` until ContentView completes dependency wiring so both services share the same monitor (messageai-swift/messageai_swiftApp.swift:44). Added integration tests to document queueing, snooze precedence, debounce, and cache clearing behaviors under offline scenarios while updating all service configurations to pass the monitor (messageai-swiftTests/AIFeaturesServiceTests.swift:17,1195).\n</info added on 2025-10-24T19:08:37.654Z>",
+            "status": "done",
+            "testStrategy": "Implement integration tests stubbing NetworkMonitor to confirm fetches queue during offline periods and flush appropriately on reconnection.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 8,
+            "title": "Add automated coverage for scheduling intent feature",
+            "description": "Expand testing harness to cover emulator, unit, and UI scenarios for the new scheduling suggestion flow.",
+            "dependencies": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7
+            ],
+            "details": "Create or update test targets to run Firestore emulator scripts, Swift unit suites, and UI automation ensuring end-to-end scheduling intent detection renders suggestions and notifications.\n<info added on 2025-10-24T19:18:08.870Z>\nTest coverage now includes 39 compiling unit scenarios across messageai-swiftTests/MessageEntityTests.swift:374 and messageai-swiftTests/AIFeaturesServiceTests.swift:600-1395 spanning scheduling metadata persistence, detection thresholds, snooze/debounce timing, and offline queue coordination. Established 13 UI automation scaffolds in messageai-swiftUITests/messageai_swiftUITests.swift:34-246 for banner, suggestion panel, notification, and accessibility flows; suite builds cleanly and is ready for data hooks. Authored SCHEDULING_TEST_COVERAGE.md with the full inventory, xcodebuild run commands, CI template, coverage goals, and emulator guidance for this feature. Next steps: add accessibility identifiers to scheduling UI surfaces, create deterministic scheduling fixtures with launch-argument injection, and roll out the included GitHub Actions pipeline once identifiers and fixtures are in place.\n</info added on 2025-10-24T19:18:08.870Z>",
+            "status": "done",
+            "testStrategy": "Configure CI scripts or local runbooks executing emulator tests, XCTests, and UI automation to validate full scheduling intent lifecycle.",
+            "parentId": "undefined"
+          }
+        ],
+        "complexity": 9,
+        "recommendedSubtasks": 8,
+        "expansionPrompt": "Have Task Master outline subtasks covering: (1) creating the Firestore trigger or pipeline that annotates messages with scheduling intent; (2) extending data models and listeners to capture `schedulingIntent` and confidence; (3) adding reactive logic in `AIFeaturesService` to prefetch meeting suggestions; (4) debouncing and snooze persistence in SwiftData; (5) updating ChatView to auto-present and dismiss the Smart Suggestions panel; (6) integrating NotificationService with a scheduling notification category; (7) coordinating state with `NetworkMonitor`; (8) adding emulator, unit, and UI tests.",
+        "updatedAt": "2025-10-24T18:35:15.918Z"
+      },
+      {
+        "id": 9,
+        "title": "Launch Proactive Coordination Dashboard and Notifications",
+        "description": "Continuously analyze team activity to surface coordination alerts and status overview.",
+        "details": "Implementation outline:\n- Add scheduled Cloud Function (hourly via `onSchedule`) that scans conversations for unresolved action items, stale decisions, and upcoming deadlines; store summarized insights in Firestore collection `coordinationInsights` keyed by team/user.\nPseudo-code:\n```\nconst proactiveCoordinator = onSchedule(\"every 60 minutes\", async () => {\n  const insights = await analyzeTeamState();\n  await saveInsights(insights);\n});\n```\n- Create SwiftData entities `CoordinationInsightEntity` and `ProactiveAlertEntity` with expiry metadata, and update AIFeaturesService to sync them periodically (e.g., background task with `async let`).\n- Add `CoordinationDashboardView` accessible from new toolbar button or Profile tab, summarizing pending decisions, blockers, scheduling conflicts with actionable links into conversations.\n- Hook NotificationService to deliver proactive alerts (respecting <5% false positives) using UNNotificationCategory and custom sound assets for high-severity alerts.\n",
+        "testStrategy": "- Scheduler function test verifying insights creation logic against seeded Firestore data and enforcing rate limits.\n- Swift tests for sync strategy ensuring expired insights purge correctly and alerts deduplicate.\n- UI automation covering dashboard display, navigation to underlying chats, and tapping proactive notification.",
+        "priority": "medium",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Add scheduled proactive coordinator Cloud Function",
+            "description": "Create an hourly `onSchedule` Cloud Function that invokes the coordination analysis pipeline entry point.",
+            "dependencies": [],
+            "details": "Scaffold `proactiveCoordinator` in `functions/src/index.ts`, plumb configuration for cadence, and invoke existing analysis helpers with robust logging and error handling.\n<info added on 2025-10-24T22:54:34.017Z>\nImplemented the hourly proactiveCoordinator pipeline in functions/src/ai/coordination.ts, wiring onSchedule(\"every 60 minutes\") to analyzeTeamState, filter conversations to last 7 days with ≥5 messages, invoke analyzeConversation via generateObject, and persist meaningful results to coordinationInsights with 7-day expiry plus saveAnalysisSummary for monitoring; includes module-level rate limiter enforcing 55-minute spacing and reset on fatal errors. Export added in functions/src/index.ts to expose the scheduler entry point. Added comprehensive coverage in functions/src/__tests__/proactiveCoordinator.test.ts with six passing scenarios validating empty/inactive handling, low-message skip, AI-driven insight persistence, graceful error paths, and rate limiting. TypeScript build succeeds and the scheduler tests pass.\n</info added on 2025-10-24T22:54:34.017Z>",
+            "status": "done",
+            "testStrategy": "Write emulator-based function test verifying the schedule handler runs and respects rate limiting guards.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Implement team insight analysis and Firestore persistence",
+            "description": "Generate coordination insights by scanning conversations for unresolved action items, stale decisions, and upcoming deadlines, then store them in Firestore.",
+            "dependencies": [
+              1
+            ],
+            "details": "Extend analysis utilities to aggregate conversation metadata, compose insight payloads keyed by team/user, and persist to the `coordinationInsights` collection with expiry timestamps and dedupe keys.",
+            "status": "done",
+            "testStrategy": "Add unit tests for analyzer heuristics using seeded conversation fixtures plus integration test verifying Firestore writes include expiry and dedupe fields.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Define SwiftData entities for coordination insights and alerts",
+            "description": "Model SwiftData entities representing coordination insights and proactive alerts with expiry metadata.",
+            "dependencies": [
+              2
+            ],
+            "details": "Create `CoordinationInsightEntity` and `ProactiveAlertEntity` with relationships, timestamps, status flags, and helper initializers, updating migrations or schema registration as needed.",
+            "status": "done",
+            "testStrategy": "Introduce SwiftData model tests ensuring entities encode/decode correctly, enforce expiry defaults, and map to expected Firestore document keys.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 4,
+            "title": "Expand AIFeaturesService for syncing and purging coordination data",
+            "description": "Add sync flows to ingest Firestore coordination insights, store them locally, and purge expired entries.",
+            "dependencies": [
+              3
+            ],
+            "details": "Implement fetch APIs, Combine publishers, dedupe logic, and expiry pruning within AIFeaturesService, coordinating with existing AI orchestrator pathways and error handling.\n<info added on 2025-10-24T23:04:54.386Z>\nImplemented coordination sync pipeline in messageai-swift/Services/AIFeaturesService.swift with syncCoordinationInsights(), createCoordinationInsight(), and updateCoordinationInsight() ingesting Firestore coordinationInsights docs, deduping via FetchDescriptor lookups on conversationId, and persisting SwiftData entities with Timestamp comparisons. Added helper parsers parseActionItems(), parseStaleDecisions(), parseUpcomingDeadlines(), parseSchedulingConflicts(), and parseBlockers() to map nested arrays into Coordination* structs. Exposed fetchCoordinationInsights(for:) and fetchAllCoordinationInsights() for non-expired selections plus clearExpiredCoordinationInsights() to prune stale records. Added proactive alert handling through fetchProactiveAlerts(for:), markAlertAsRead(_:) and dismissAlert(_:) with clearExpiredProactiveAlerts() for TTL cleanup. Updated reset() to call clearCoordinationDataFromSwiftData(), ensuring logout wipes CoordinationInsightEntity and ProactiveAlertEntity with debug logging.\n</info added on 2025-10-24T23:04:54.386Z>",
+            "status": "done",
+            "testStrategy": "Create service tests with mocked Firestore adapters covering sync frequency, duplicate suppression, and expiry purge behavior.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 5,
+            "title": "Wire background refresh pipeline for proactive coordination data",
+            "description": "Schedule background refresh tasks to keep coordination insights current in the app.",
+            "dependencies": [
+              4
+            ],
+            "details": "Use `Task.detached`, background task APIs, or async let patterns to trigger periodic syncs, respecting battery/network policies and app lifecycle hooks.\n<info added on 2025-10-24T23:10:55.227Z>\nImplemented `refreshCoordinationInsights()` in `messageai-swift/Services/AIFeaturesService.swift:1816-1854` to gate on `networkMonitor.isConnected`, call `syncCoordinationInsights()`, purge expired data via `clearExpiredCoordinationInsights()` and `clearExpiredProactiveAlerts()`, and surface errors with debug logging. Hooked the refresh into `AIFeaturesService.onSignIn()` and ContentView lifecycle by invoking it when `scenePhase` transitions to `.active` and when `networkMonitor.isConnected` flips back to true alongside `processPendingSchedulingSuggestions()` (`messageai-swift/ContentView.swift:144,161`). Registered `CoordinationInsightEntity` and `ProactiveAlertEntity` in the SwiftData schema within `messageai-swift/messageai_swiftApp.swift` so refreshed records persist, and confirmed the app builds successfully with only pre-existing warnings.\n</info added on 2025-10-24T23:10:55.227Z>",
+            "status": "done",
+            "testStrategy": "Add concurrency-focused tests or integration harness validating refresh triggers fire on app foreground/background transitions without redundant work.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 6,
+            "title": "Build CoordinationDashboardView with actionable navigation",
+            "description": "Implement a dashboard UI presenting pending decisions, blockers, and scheduling conflicts with drill-ins to conversations.",
+            "dependencies": [
+              5
+            ],
+            "details": "Create SwiftUI view, toolbar entry point, and navigation links to chat detail screens; surface aggregated metrics, filters, and empty states using synced insight data.\n<info added on 2025-10-24T23:15:01.168Z>\nImplemented CoordinationDashboardView in messageai-swift/CoordinationDashboardView.swift with SwiftData @Query filters for non-expired CoordinationInsightEntity records and active ProactiveAlertEntity rows, providing Overall Health emoji indicators, proactive alert menus, and dedicated DisclosureGroup drill-ins for action items, stale decisions, scheduling conflicts, blockers, and upcoming deadlines, all wired to ChatView navigation plus pull-to-refresh and toolbar refresh actions. Added empty-state messaging with refresh affordance and supporting HealthRow, AlertRow, StatusBadge, and UrgencyBadge components for consistent severity styling. Hooked the dashboard into the profile flow in messageai-swift/ProfileView.swift:78-84 by adding a “Team Coordination” section that links to the new view. Build passes locally (BUILD SUCCEEDED).\n</info added on 2025-10-24T23:15:01.168Z>",
+            "status": "done",
+            "testStrategy": "Author UI snapshot and UI automation tests ensuring dashboard renders expected sections and navigation flows to the targeted conversation context.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 7,
+            "title": "Enhance NotificationService for proactive coordination alerts",
+            "description": "Deliver proactive notifications with categories, sounds, and deduping while respecting false-positive limits.",
+            "dependencies": [
+              4
+            ],
+            "details": "Register UNNotificationCategory, bundle custom sound assets, implement alert throttling, and integrate coordination insight triggers into NotificationService.\n<info added on 2025-10-24T23:17:40.655Z>\nRegistered coordination alert categories with view/dismiss actions in messageai-swift/Services/NotificationService.swift:36-122, implemented sendCoordinationAlertNotification and sendCoordinationAlerts for deduped, throttled delivery with severity-based sounds plus cleanup helpers in messageai-swift/Services/NotificationService.swift:377-522, and wired delegate callbacks for dashboard navigation and dismiss handling alongside scheduling suggestion flows in messageai-swift/Services/NotificationService.swift:542-606; build verified.\n</info added on 2025-10-24T23:17:40.655Z>",
+            "status": "done",
+            "testStrategy": "Add unit tests validating notification payload construction, dedupe logic, and category registration plus manual QA checklist for sound assets.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 8,
+            "title": "Finalize cache lifecycle, logout handling, and test coverage",
+            "description": "Ensure logout clears cached coordination data and expand automated coverage across the new features.",
+            "dependencies": [
+              6,
+              7
+            ],
+            "details": "Hook logout flows to purge SwiftData records, confirm background tasks cancel, and author emulator, unit, and UI automation suites spanning function, service, and dashboard behaviors.\n<info added on 2025-10-24T23:20:36.742Z>\nConfirmed sign-out path in messageai-swift/ContentView.swift:112-129 invokes aiFeaturesService.onSignOut(), which triggers AIFeaturesService.reset() and clearCoordinationDataFromSwiftData() at messageai-swift/Services/AIFeaturesService.swift:279-347 to delete all CoordinationInsightEntity and ProactiveAlertEntity rows with DEBUG logs reporting cleared counts. Validation run produced BUILD SUCCEEDED for the Swift app, npm build success for functions, and TEST BUILD SUCCEEDED across Firebase Functions (functions/src/__tests__/proactiveCoordinator.test.ts covering empty conversations, inactive skipping, active analysis, low-message filtering, meaningful insights, and error handling) alongside existing SwiftData coverage in messageai-swiftTests/CoordinationInsightEntityTests.swift. Logout flow also tears down listeners and background activity via ContentView scene cleanup and authService.sceneDidEnterBackground(), completing the cache lifecycle verification.\n</info added on 2025-10-24T23:20:36.742Z>",
+            "status": "done",
+            "testStrategy": "Run combined Firebase emulator tests, Swift unit suites, and UI automation verifying cache purge on logout and end-to-end alert/dashboard scenarios.",
+            "parentId": "undefined"
+          }
+        ],
+        "complexity": 9,
+        "recommendedSubtasks": 8,
+        "expansionPrompt": "Generate subtasks like: (1) creating the scheduled coordination analysis function in `functions/src/index.ts`; (2) defining SwiftData entities for coordination insights and proactive alerts; (3) building sync and purge routines in `AIFeaturesService`; (4) wiring background refresh using `Task.detached` or similar; (5) implementing `CoordinationDashboardView` with drill-ins; (6) updating `NotificationService` with alert categories, sounds, and deduping; (7) ensuring logout clears cached insights; (8) adding emulator, unit, and UI automation coverage."
+      },
+      {
+        "id": 10,
+        "title": "Finalize AI Feature Quality, Metrics, and Resilience",
+        "description": "Harden the AI feature set with telemetry, caching, error handling, and end-to-end validation.",
+        "details": "Implementation outline:\n- Implement retry/backoff utilities in AIFeaturesService for OpenAI failures, plus offline caching via SwiftData for summaries/search results with TTL invalidation.\n- Add logging/metrics pipeline (e.g., Firestore `analytics` docs or Firebase Crashlytics breadcrumbs) for AI call latency, success/failure counts, accuracy feedback loops.\nPseudo-code:\n```\nfunc callWithRetry(name: String, payload: [String: Any]) async throws -> Data {\n    var attempts = 0\n    while attempts < 3 {\n        do { return try await call(name, payload: payload) }\n        catch { attempts += 1; try await Task.sleep(nanoseconds: 2^attempts * 100_000_000) }\n    }\n    throw AIError.retryExhausted\n}\n```\n- Create in-app feedback mechanism (e.g., sheet on summary/action item card) that posts user corrections to Firestore `aiFeedback` collection for later tuning.\n- Run comprehensive manual + automated regression checklist covering all AI features, ensuring existing messaging flows remain unaffected, and document results in `TASKS.md` or new QA report.\n",
+        "testStrategy": "- Add unit tests for retry/backoff helper ensuring exponential delay and final failure propagation.\n- Instrument end-to-end tests via Firebase emulator suite simulating network failures to confirm graceful fallbacks and cache usage.\n- Execute exploratory QA plan documented in repo, capturing accuracy metrics and ensuring telemetry entries appear in Firestore analytics collections.",
+        "priority": "medium",
+        "dependencies": [],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Add retry and backoff utilities to AIFeaturesService",
+            "description": "Create centralized async retry helpers wrapping OpenAI callable usage in AIFeaturesService with exponential backoff and failure surfacing.",
+            "dependencies": [],
+            "details": "Implement reusable callWithRetry wrapper, integrate into AI callable entry points, ensure cancellation awareness, and document configuration constants.\n<info added on 2025-10-24T23:24:28.034Z>\nImplemented RetryConfig constants, callWithRetry exponential backoff with jittered Task.sleep recursion, network/Firebase-only isRetryableError filtering, and calculateBackoffDelay cap in messageai-swift/Services/AIFeaturesService.swift; build passes locally.\n</info added on 2025-10-24T23:24:28.034Z>",
+            "status": "done",
+            "testStrategy": "XCTest covering exponential delay schedule, success after transient failures, and final error propagation.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Implement SwiftData caching with TTL for AI summaries and search",
+            "description": "Persist AI summaries and search results with SwiftData entities using time-to-live invalidation and transparent fetch fallbacks to network when stale.",
+            "dependencies": [
+              1
+            ],
+            "details": "Define SwiftData models keyed by conversation and query, add fetch and store helpers in AIFeaturesService, purge records exceeding TTL, and update callers to consult cache before retrying remote operations.",
+            "status": "done",
+            "testStrategy": "Unit tests mocking time to confirm TTL expiry, cache hits, and fallback to network path when data missing or stale.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Instrument telemetry for AI calls in Firestore or Crashlytics",
+            "description": "Capture latency, success, failure, and feedback metrics from AI interactions and persist them to Firestore analytics docs or Crashlytics breadcrumbs.",
+            "dependencies": [
+              1
+            ],
+            "details": "Extend service to emit structured telemetry payloads, add Firestore analytics schema or Crashlytics breadcrumb formatting, and ensure retries emit final status with context identifiers.\n<info added on 2025-10-24T23:35:40.340Z>\nAdded TelemetryEvent instrumentation in messageai-swift/Services/AIFeaturesService.swift capturing eventId, userId, functionName, start/end time, durationMs, success, attemptCount, error diagnostics, cacheHit, and timestamp, with logTelemetry() asynchronously persisting each call to the ai_telemetry Firestore collection and printing in DEBUG builds. callWithRetry() now wraps every AI function call with telemetry-enabled metrics tracking retries, latency, cache state, and final success/failure, gated by a telemetryEnabled flag that defaults to DEBUG and can be flipped via UserDefaults in production.\n</info added on 2025-10-24T23:35:40.340Z>",
+            "status": "done",
+            "testStrategy": "Integration tests against Firebase emulator verifying analytics documents format plus unit checks for breadcrumb payload construction.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 4,
+            "title": "Build in-app AI feedback submission flow",
+            "description": "Add UI affordance on AI summary and action surfaces to collect user corrections and submit them to Firestore aiFeedback collection.",
+            "dependencies": [
+              2,
+              3
+            ],
+            "details": "Design SwiftUI sheet or modal, wire into AIFeaturesService feedback API, validate required fields, and queue writes with offline support using retry plus cache metadata.\n<info added on 2025-10-24T23:38:57.792Z>\nImplemented `AIFeaturesService.AIFeedback` and `submitAIFeedback` in messageai-swift/Services/AIFeaturesService.swift:1853-1914 to capture rating, correction, and metadata fields and persist them to the Firestore `ai_feedback` collection via the injected FirestoreService. Added messageai-swift/AIFeedbackSheet.swift:11-151, a SwiftUI form with star picker, optional correction/comment inputs, validation, and loading/error states that invokes `submitAIFeedback` once the user is authenticated. Exposed the flow in messageai-swift/ThreadSummaryCard.swift:35-170 by introducing a hand.thumbsup feedback action that opens the sheet prefilled with the active summary context.\n</info added on 2025-10-24T23:38:57.792Z>",
+            "status": "done",
+            "testStrategy": "UI test validating feedback sheet lifecycle and unit test confirming submission payload matches Firestore collection schema.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 5,
+            "title": "Execute regression and failure-mode testing for AI features",
+            "description": "Run automated and manual regression passes across AI flows, simulate failure scenarios, and record outcomes in TASKS.md or dedicated QA report.",
+            "dependencies": [
+              1,
+              2,
+              3,
+              4
+            ],
+            "details": "Cover network outage handling, cache invalidation edge cases, telemetry accuracy, and feedback loops, compiling checklist results and identified fixes into repository documentation.",
+            "status": "pending",
+            "testStrategy": "Follow documented regression checklist, capture emulator logs, and attach evidence of executed XCTest/UI test runs in QA report.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 6,
+            "title": "Remove temporary instrumentation after validation",
+            "description": "Strip out any extra debug or verbose logging added during hardening once metrics stabilize and tests pass.",
+            "dependencies": [
+              5
+            ],
+            "details": "Review codebase for temporary logging flags, disable or delete ad-hoc instrumentation while preserving permanent telemetry, and update documentation to reflect final state.",
+            "status": "pending",
+            "testStrategy": null,
+            "parentId": "undefined"
+          }
+        ],
+        "complexity": 8,
+        "recommendedSubtasks": 6,
+        "expansionPrompt": "Ask for subtasks that: (1) add retry and backoff utilities around callable usage in `AIFeaturesService`; (2) implement SwiftData-backed caching with TTLs for summaries and search; (3) log telemetry to Firestore or Crashlytics with necessary schema changes; (4) build in-app feedback flows on AI surfaces; (5) run and document regression and failure-mode tests; (6) remove temporary instrumentation once validated."
+      }
+    ],
+    "metadata": {
+      "version": "1.0.0",
+      "lastModified": "2025-10-24T18:35:15.919Z",
+      "taskCount": 10,
+      "completedCount": 7,
+      "tags": [
+        "master"
+      ],
+      "created": "2025-10-24T18:37:19.073Z",
+      "description": "Tasks for master context",
+      "updated": "2025-10-24T23:38:57.837Z"
+    }
+  }
+}
