@@ -236,7 +236,12 @@ struct ChatView: View {
                                         sender: senderForMessage(message),
                                         bot: botForMessage(message),
                                         participants: participants,
-                                        isOnline: networkMonitor.isConnected
+                                        isOnline: networkMonitor.isConnected,
+                                        onRetryMessage: {
+                                            Task {
+                                                try? await messagingService.retryFailedMessage(messageId: message.id)
+                                            }
+                                        }
                                     )
                                     .id(message.id)
                                 }
@@ -640,6 +645,7 @@ private struct MessageBubble: View {
     let bot: BotEntity?
     let participants: [UserEntity]
     let isOnline: Bool
+    let onRetryMessage: (() -> Void)?
     @State private var showingReceiptDetails = false
 
     private var displayName: String {
@@ -775,8 +781,8 @@ private struct MessageBubble: View {
                 // For the sender themselves viewing their own message
                 if isSelf {
                     // Show complete only when message has hit server
-                    isComplete = message.deliveryStatus != .sending
-                    statusText = message.deliveryStatus == .sending ? "Sending" : "Sent"
+                    isComplete = message.deliveryState != .pending
+                    statusText = message.deliveryState == .pending ? "Sending" : "Sent"
                 } else {
                     // For recipients viewing the sender's checkmark - always complete
                     // (they wouldn't see the message if it wasn't sent)
@@ -886,9 +892,11 @@ private struct MessageBubble: View {
                     .foregroundStyle(timestampColor)
                     .font(.caption2)
 
-                if message.deliveryStatus == .sending {
-                    DeliveryStatusIcon(
-                        status: message.deliveryStatus,
+                // Show delivery state indicator for sender's own messages
+                if message.senderId == currentUserId {
+                    DeliveryStateIcon(
+                        state: message.deliveryState,
+                        onRetry: message.deliveryState == .failed ? onRetryMessage : nil,
                         color: metaTextColor
                     )
                 }
@@ -943,24 +951,69 @@ private struct MessageBubble: View {
     }
 }
 
+private struct DeliveryStateIcon: View {
+    let state: MessageDeliveryState
+    let onRetry: (() -> Void)?
+    var color: Color
+
+    var body: some View {
+        switch state {
+        case .pending:
+            // Animated gray checkmark
+            Image(systemName: "checkmark")
+                .foregroundStyle(.gray)
+                .opacity(0.6)
+                .symbolEffect(.pulse)
+        case .sent:
+            // Single blue checkmark
+            Image(systemName: "checkmark")
+                .foregroundStyle(.blue)
+        case .delivered:
+            // Double blue checkmark (regular weight)
+            HStack(spacing: -4) {
+                Image(systemName: "checkmark")
+                    .foregroundStyle(.blue)
+                Image(systemName: "checkmark")
+                    .foregroundStyle(.blue)
+            }
+        case .read:
+            // Double blue checkmark (bold)
+            HStack(spacing: -4) {
+                Image(systemName: "checkmark")
+                    .foregroundStyle(.blue)
+                    .fontWeight(.bold)
+                Image(systemName: "checkmark")
+                    .foregroundStyle(.blue)
+                    .fontWeight(.bold)
+            }
+        case .failed:
+            // Red exclamation with retry
+            if let onRetry {
+                Button(action: onRetry) {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .foregroundStyle(.red)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Retry sending message")
+            } else {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .foregroundStyle(.red)
+            }
+        }
+    }
+}
+
+// Legacy support
 private struct DeliveryStatusIcon: View {
     let status: DeliveryStatus
     var color: Color
 
     var body: some View {
-        if let iconName {
-            Image(systemName: iconName)
-                .foregroundStyle(color)
-        }
-    }
-
-    private var iconName: String? {
-        switch status {
-        case .sending: return "clock"
-        case .sent: return "checkmark"
-        case .delivered: return "checkmark.circle"
-        case .read: return "checkmark.circle.fill"
-        }
+        DeliveryStateIcon(
+            state: status.toDeliveryState,
+            onRetry: nil,
+            color: color
+        )
     }
 }
 
