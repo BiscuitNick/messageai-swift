@@ -11,6 +11,7 @@ struct DebugView: View {
     @Environment(NotificationService.self) private var notificationService
     @Environment(MessagingService.self) private var messagingService
     @Environment(FirestoreService.self) private var firestoreService
+    @Environment(NetworkSimulator.self) private var networkSimulator
     private let functions = Functions.functions(region: "us-central1")
 
     @Query private var bots: [BotEntity]
@@ -37,6 +38,7 @@ struct DebugView: View {
         NavigationStack {
             List {
                 maintenanceSection
+                connectivitySection
                 firebaseSection
                 authSection
                 botsSection
@@ -46,6 +48,68 @@ struct DebugView: View {
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Test")
+        }
+    }
+
+    private var connectivitySection: some View {
+        Section {
+            HStack {
+                Label("Network Status", systemImage: "antenna.radiowaves.left.and.right")
+                Spacer()
+                Circle()
+                    .fill(networkStatusColor)
+                    .frame(width: 12, height: 12)
+            }
+
+            Toggle("Network Simulation", isOn: Binding(
+                get: { networkSimulator.simulationEnabled },
+                set: { networkSimulator.simulationEnabled = $0 }
+            ))
+
+            Toggle("WiFi Enabled", isOn: Binding(
+                get: { networkSimulator.wifiEnabled },
+                set: { networkSimulator.wifiEnabled = $0 }
+            ))
+            .disabled(!networkSimulator.simulationEnabled)
+
+            if networkSimulator.simulationEnabled {
+                Picker("Network Condition", selection: Binding(
+                    get: { networkSimulator.currentCondition },
+                    set: { networkSimulator.currentCondition = $0 }
+                )) {
+                    ForEach(NetworkCondition.allCases, id: \.self) { condition in
+                        Text(condition.displayName).tag(condition)
+                    }
+                }
+            }
+        } header: {
+            Text("Network Simulation")
+        } footer: {
+            if networkSimulator.simulationEnabled {
+                Text("Network simulation is active. Messages will experience artificial delays and failures based on the selected condition.")
+                    .font(.caption)
+            }
+        }
+    }
+
+    private var networkStatusColor: Color {
+        guard networkSimulator.simulationEnabled else {
+            return .gray
+        }
+
+        if !networkSimulator.wifiEnabled {
+            return .red
+        }
+
+        switch networkSimulator.currentCondition {
+        case .normal:
+            return .green
+        case .poor:
+            return .yellow
+        case .veryPoor:
+            return .orange
+        case .offline:
+            return .red
         }
     }
 

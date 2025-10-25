@@ -27,6 +27,7 @@ struct ChatView: View {
     @Environment(FirestoreService.self) private var firestoreService
     @Environment(NetworkMonitor.self) private var networkMonitor
     @Environment(AIFeaturesService.self) private var aiFeaturesService
+    @Environment(TypingStatusService.self) private var typingStatusService
     @Environment(\.modelContext) private var modelContext
 
     @State private var messageText: String = ""
@@ -39,6 +40,7 @@ struct ChatView: View {
     @State private var showMeetingSuggestions: Bool = false
     @State private var meetingSuggestions: MeetingSuggestionsResponse?
     @State private var showSchedulingBanner: Bool = false
+    @State private var activeTypers: [TypingStatusService.TypingIndicator] = []
     @FocusState private var composerFocused: Bool
 
     private var isAIConversation: Bool {
@@ -204,6 +206,32 @@ struct ChatView: View {
             // Stop Firestore listeners to prevent memory leaks
             firestoreService.stopActionItemsListener(conversationId: conversationId)
             firestoreService.stopDecisionsListener(conversationId: conversationId)
+            typingStatusService.stopObserving(conversationId: conversationId)
+        }
+        .task {
+            // Observe typing status
+            typingStatusService.observeTypingStatus(conversationId: conversationId) { indicators in
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    activeTypers = indicators
+                }
+            }
+        }
+        .onChange(of: messageText) { oldValue, newValue in
+            // Send typing notification when user starts typing
+            let oldTrimmed = oldValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            let newTrimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if oldTrimmed.isEmpty && !newTrimmed.isEmpty {
+                // User started typing
+                Task {
+                    try? await typingStatusService.setTyping(conversationId: conversationId, isTyping: true)
+                }
+            } else if !oldTrimmed.isEmpty && newTrimmed.isEmpty {
+                // User cleared text
+                Task {
+                    try? await typingStatusService.setTyping(conversationId: conversationId, isTyping: false)
+                }
+            }
         }
         .alert(
             "Unable to send message",
@@ -381,6 +409,21 @@ struct ChatView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
+            // Typing Indicators
+            if !activeTypers.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(activeTypers) { typer in
+                        TypingBubble(
+                            displayName: participantLookup[typer.userId]?.displayName ?? typer.displayName,
+                            isGroupChat: conversation.isGroup
+                        )
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+
             Divider()
 
             ComposerView(
@@ -430,6 +473,9 @@ struct ChatView: View {
                 // Send user's message
                 try await messagingService.sendMessage(conversationId: conversationId, text: content)
                 messageText = ""
+
+                // Clear typing status
+                try? await typingStatusService.setTyping(conversationId: conversationId, isTyping: false)
 
                 // If this is an AI conversation, call the agent
                 // The agent will write its response directly to Firestore
@@ -1265,5 +1311,55 @@ struct SchedulingIntentBanner: View {
         .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
+    }
+}
+
+// MARK: - TypingBubble Component
+private struct TypingBubble: View {
+    let displayName: String
+    let isGroupChat: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            // Show name for group chats
+            if isGroupChat {
+                Text(displayName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            // Animated dots
+            HStack(spacing: 4) {
+                ForEach(0..<3) { index in
+                    Circle()
+                        .fill(Color.gray.opacity(0.6))
+                        .frame(width: 6, height: 6)
+                        .animation(
+                            Animation.easeInOut(duration: 0.6)
+                                .repeatForever()
+                                .delay(Double(index) * 0.2),
+                            value: true
+                        )
+                        .offset(y: animationOffset(for: index))
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color(.systemGray5))
+            .cornerRadius(16)
+        }
+        .accessibilityLabel(isGroupChat ? "\(displayName) is typing" : "User is typing")
+    }
+
+    @State private var isAnimating = false
+
+    private func animationOffset(for index: Int) -> CGFloat {
+        isAnimating ? -4 : 0
+    }
+
+    init(displayName: String, isGroupChat: Bool) {
+        self.displayName = displayName
+        self.isGroupChat = isGroupChat
+        _isAnimating = State(initialValue: true)
     }
 }

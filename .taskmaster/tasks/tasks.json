@@ -53,7 +53,7 @@
         "testStrategy": "Add unit tests with mocked Firestore to verify status expiry, multiple concurrent typers, and cleanup; consider integration tests using the Firestore emulator.",
         "priority": "medium",
         "dependencies": [],
-        "status": "pending",
+        "status": "done",
         "subtasks": []
       },
       {
@@ -64,7 +64,7 @@
         "testStrategy": "UI snapshot tests covering 1, 2, and 3 active typers; UITest simulating typing (via service mock) verifying fade animation and removal after timeout.",
         "priority": "medium",
         "dependencies": [],
-        "status": "pending",
+        "status": "done",
         "subtasks": []
       },
       {
@@ -75,7 +75,7 @@
         "testStrategy": "Unit tests seeding RNG to verify latency bounds and failure rates; ensure persistence round-trips through UserDefaults.",
         "priority": "medium",
         "dependencies": [],
-        "status": "pending",
+        "status": "done",
         "subtasks": []
       },
       {
@@ -86,7 +86,7 @@
         "testStrategy": "Add service-level tests using a stub NetworkSimulator to confirm delays and failure propagation; run manual QA toggling modes while sending messages to verify UX.",
         "priority": "medium",
         "dependencies": [],
-        "status": "pending",
+        "status": "done",
         "subtasks": []
       },
       {
@@ -97,7 +97,7 @@
         "testStrategy": "Write SwiftUI unit tests (ViewInspector) ensuring separators appear only after tool use; manual QA verifying controls persist across launches.",
         "priority": "medium",
         "dependencies": [],
-        "status": "pending",
+        "status": "done",
         "subtasks": []
       },
       {
@@ -114,7 +114,7 @@
     ],
     "metadata": {
       "created": "2025-10-25T01:21:19.303Z",
-      "updated": "2025-10-25T02:17:53.548Z",
+      "updated": "2025-10-25T02:34:05.243Z",
       "description": "Tasks for master context"
     }
   }

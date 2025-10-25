@@ -32,6 +32,7 @@ final class MessagingService {
     private var currentUserId: String?
     private let botUserId = "dash-bot"  // Legacy bot user ID
     private var notificationService: NotificationService?
+    private var networkSimulator: NetworkSimulator?
     private var isAppInForeground: Bool = true
 
     // AI Features Callback
@@ -41,10 +42,11 @@ final class MessagingService {
         self.db = db
     }
 
-    func configure(modelContext: ModelContext, currentUserId: String, notificationService: NotificationService? = nil) {
+    func configure(modelContext: ModelContext, currentUserId: String, notificationService: NotificationService? = nil, networkSimulator: NetworkSimulator? = nil) {
         self.modelContext = modelContext
         self.currentUserId = currentUserId
         self.notificationService = notificationService
+        self.networkSimulator = networkSimulator
         observeConversations(for: currentUserId)
     }
 
@@ -674,16 +676,31 @@ final class MessagingService {
             "timestamp": Timestamp(date: timestamp),
             "deliveryState": MessageDeliveryState.sent.rawValue,
             // Legacy field for backward compatibility
-            "deliveryState": "sent",
+            "deliveryStatus": "sent",
             "updatedAt": FieldValue.serverTimestamp()
         ]
 
         let task = Task { [weak self] in
             do {
-                try await messageRef.setData(payload)
+                // Wrap Firestore setData with network simulation
+                if let simulator = self?.networkSimulator {
+                    try await simulator.execute {
+                        try await messageRef.setData(payload)
+                    }
+                } else {
+                    try await messageRef.setData(payload)
+                }
 
                 // Get current conversation to update lastInteractionByUser
-                let conversationDoc = try await conversationRef.getDocument()
+                let conversationDoc: DocumentSnapshot
+                if let simulator = self?.networkSimulator {
+                    conversationDoc = try await simulator.execute {
+                        try await conversationRef.getDocument()
+                    }
+                } else {
+                    conversationDoc = try await conversationRef.getDocument()
+                }
+
                 var lastInteractionByUser = Self.parseTimestampDictionary(conversationDoc.data()?["lastInteractionByUser"])
                 lastInteractionByUser[currentUserId] = timestamp
 
@@ -693,13 +710,26 @@ final class MessagingService {
                     firestoreInteractionMap[userId] = Timestamp(date: date)
                 }
 
-                try await conversationRef.setData([
-                    "lastMessage": trimmed,
-                    "lastMessageTimestamp": Timestamp(date: timestamp),
-                    "lastSenderId": currentUserId,
-                    "lastInteractionByUser": firestoreInteractionMap,
-                    "updatedAt": FieldValue.serverTimestamp()
-                ], merge: true)
+                // Wrap conversation update with network simulation
+                if let simulator = self?.networkSimulator {
+                    try await simulator.execute {
+                        try await conversationRef.setData([
+                            "lastMessage": trimmed,
+                            "lastMessageTimestamp": Timestamp(date: timestamp),
+                            "lastSenderId": currentUserId,
+                            "lastInteractionByUser": firestoreInteractionMap,
+                            "updatedAt": FieldValue.serverTimestamp()
+                        ], merge: true)
+                    }
+                } else {
+                    try await conversationRef.setData([
+                        "lastMessage": trimmed,
+                        "lastMessageTimestamp": Timestamp(date: timestamp),
+                        "lastSenderId": currentUserId,
+                        "lastInteractionByUser": firestoreInteractionMap,
+                        "updatedAt": FieldValue.serverTimestamp()
+                    ], merge: true)
+                }
 
                 // Update local conversation's lastInteractionByUser for sender
                 await self?.updateLocalSenderInteraction(conversationId: conversationId, userId: currentUserId, timestamp: timestamp, lastMessage: trimmed)

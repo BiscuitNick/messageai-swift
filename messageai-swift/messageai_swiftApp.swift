@@ -20,6 +20,8 @@ struct messageai_swiftApp: App {
     @State private var notificationService: NotificationService
     @State private var networkMonitor: NetworkMonitor
     @State private var aiFeaturesService: AIFeaturesService
+    @State private var typingStatusService: TypingStatusService
+    @State private var networkSimulator: NetworkSimulator
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
             UserEntity.self,
@@ -56,6 +58,8 @@ struct messageai_swiftApp: App {
         _notificationService = State(wrappedValue: notification)
         _networkMonitor = State(wrappedValue: NetworkMonitor())
         _aiFeaturesService = State(wrappedValue: AIFeaturesService())
+        _typingStatusService = State(wrappedValue: TypingStatusService())
+        _networkSimulator = State(wrappedValue: NetworkSimulator())
         appDelegate.notificationService = notification
     }
 
@@ -68,6 +72,8 @@ struct messageai_swiftApp: App {
                 .environment(notificationService)
                 .environment(networkMonitor)
                 .environment(aiFeaturesService)
+                .environment(typingStatusService)
+                .environment(networkSimulator)
         }
         .modelContainer(sharedModelContainer)
     }
