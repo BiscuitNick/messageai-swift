@@ -9,7 +9,7 @@
         "testStrategy": "Build the iOS target in Xcode and via `xcodebuild` to confirm references compile; run a smoke UI test to catch resource path regressions.",
         "priority": "medium",
         "dependencies": [],
-        "status": "pending",
+        "status": "done",
         "subtasks": []
       },
       {
@@ -20,7 +20,7 @@
         "testStrategy": "Extend `MessageEntityTests` to cover the new enum cases, legacy-to-new migration, and Codable round-trips for each state.",
         "priority": "medium",
         "dependencies": [],
-        "status": "pending",
+        "status": "done",
         "subtasks": []
       },
       {
@@ -31,7 +31,7 @@
         "testStrategy": "Add unit tests around MessagingService mocks simulating Firestore callbacks to verify state transitions, retry path, and `readBy` writes; run integration tests with Firebase emulator if available.",
         "priority": "medium",
         "dependencies": [],
-        "status": "pending",
+        "status": "done",
         "subtasks": []
       },
       {
@@ -114,7 +114,7 @@
     ],
     "metadata": {
       "created": "2025-10-25T01:21:19.303Z",
-      "updated": "2025-10-25T01:21:19.303Z",
+      "updated": "2025-10-25T02:12:21.627Z",
       "description": "Tasks for master context"
     }
   }

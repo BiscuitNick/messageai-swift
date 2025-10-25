@@ -13,9 +13,9 @@
       "temperature": 0.1
     },
     "fallback": {
-      "provider": "codex-cli",
-      "modelId": "gpt-5",
-      "maxTokens": 128000,
+      "provider": "grok-cli",
+      "modelId": "grok-3-latest",
+      "maxTokens": 131072,
       "temperature": 0.2
     }
   },

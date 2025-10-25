@@ -511,14 +511,16 @@ final class FirestoreService {
         ], merge: true)
     }
 
-    func updateMessageDelivery(conversationId: String, messageId: String, status: DeliveryStatus, userId: String) async throws {
+    func updateMessageDelivery(conversationId: String, messageId: String, status: MessageDeliveryState, userId: String) async throws {
         let messageRef = db.collection("conversations")
             .document(conversationId)
             .collection("messages")
             .document(messageId)
 
         var update: [String: Any] = [
-            "deliveryStatus": status.rawValue,
+            "deliveryState": status.rawValue,
+            // Legacy field for backward compatibility
+            "deliveryStatus": status.rawValue == "pending" ? "sending" : status.rawValue,
             "updatedAt": FieldValue.serverTimestamp()
         ]
 
