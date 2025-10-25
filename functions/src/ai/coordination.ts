@@ -3,6 +3,7 @@ import { generateObject } from "ai";
 import { openai } from "../core/config";
 import { z } from "zod";
 import { onSchedule } from "firebase-functions/v2/scheduler";
+import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { COLLECTION_CONVERSATIONS, SUBCOLLECTION_MESSAGES } from "../core/constants";
 
 const firestore = admin.firestore();
@@ -299,6 +300,47 @@ function shouldRun(): boolean {
   const timeSinceLastRun = Date.now() - lastRunTimestamp;
   return timeSinceLastRun >= MIN_RUN_INTERVAL_MS;
 }
+
+/**
+ * Callable Cloud Function: Trigger Coordination Analysis
+ * Allows authenticated users to manually trigger coordination insights generation
+ * Same logic as the scheduled proactiveCoordinator, but callable on-demand
+ */
+export const triggerCoordinationAnalysis = onCall(async (request) => {
+  // Require authentication
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "User must be authenticated");
+  }
+
+  const uid = request.auth.uid;
+  console.log(`[triggerCoordinationAnalysis] Manual trigger by user ${uid}`);
+
+  try {
+    // Run team coordination analysis (same as scheduled function)
+    const result = await analyzeTeamState();
+
+    // Save summary for monitoring
+    await saveAnalysisSummary(result);
+
+    console.log("[triggerCoordinationAnalysis] Successfully completed analysis", {
+      conversationsAnalyzed: result.conversationsAnalyzed,
+      insightsGenerated: result.insightsGenerated,
+      errors: result.errors,
+    });
+
+    // Return results to client
+    return {
+      success: true,
+      conversations_analyzed: result.conversationsAnalyzed,
+      insights_generated: result.insightsGenerated,
+      errors: result.errors,
+      timestamp: result.timestamp.toDate().toISOString(),
+    };
+  } catch (error) {
+    console.error("[triggerCoordinationAnalysis] Error during manual trigger:", error);
+    throw new HttpsError("internal", "Failed to analyze team coordination", error);
+  }
+});
 
 /**
  * Scheduled Cloud Function: Proactive Coordinator

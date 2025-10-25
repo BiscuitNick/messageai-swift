@@ -5,6 +5,7 @@ import { openai } from "../core/config";
 import { z } from "zod";
 import { requireAuth } from "../core/auth";
 import { fetchSenderNames } from "../core/utils";
+import crypto from "crypto";
 
 const firestore = admin.firestore();
 import { COLLECTION_CONVERSATIONS, COLLECTION_USERS, COLLECTION_BOTS } from "../core/constants";
@@ -32,6 +33,22 @@ const actionItemSchema = z.object({
 const actionItemsResponseSchema = z.object({
   actionItems: z.array(actionItemSchema).describe("List of extracted action items"),
 });
+
+/**
+ * Generate a deterministic ID for an action item based on its content
+ * This prevents duplicates when re-extracting the same action items
+ */
+function generateActionItemId(
+  conversationId: string,
+  task: string,
+  assignedTo?: string
+): string {
+  const normalizedTask = task.toLowerCase().trim();
+  const normalizedAssignee = assignedTo?.toLowerCase().trim() || "unassigned";
+  const content = `${conversationId}:${normalizedTask}:${normalizedAssignee}`;
+  const hash = crypto.createHash("sha256").update(content).digest("hex");
+  return `action-${hash.substring(0, 16)}`;
+}
 
 /**
  * Callable function to extract action items from recent conversation messages
@@ -133,8 +150,9 @@ export const extractActionItems = onCall<ExtractActionItemsRequest>(async (reque
     console.log(`[extractActionItems] OpenAI found ${extractedData.actionItems.length} action items`);
 
     // Format response and persist to Firestore
-    const actionItems = extractedData.actionItems.map((item, index) => ({
-      id: item.id || `action-${Date.now()}-${index}`,
+    // Use deterministic IDs based on content hash to prevent duplicates
+    const actionItems = extractedData.actionItems.map((item) => ({
+      id: generateActionItemId(conversationId, item.task, item.assignedTo),
       task: item.task,
       assigned_to: item.assignedTo || null,
       due_date: item.dueDate || null,

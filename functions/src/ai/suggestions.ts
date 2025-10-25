@@ -237,7 +237,19 @@ export const suggestMeetingTimes = onCall<SuggestMeetingTimesRequest>(async (req
       timeOfDay: s.timeOfDay,
     }));
 
-    return { suggestions };
+    // Calculate expiration (suggestions expire in 24 hours)
+    const generatedAt = new Date();
+    const expiresAt = new Date(generatedAt);
+    expiresAt.setHours(expiresAt.getHours() + 24);
+
+    return {
+      suggestions,
+      conversation_id: conversationId,
+      duration_minutes: durationMinutes,
+      participant_count: participantIds.length,
+      generated_at: generatedAt.toISOString(),
+      expires_at: expiresAt.toISOString(),
+    };
 
   } catch (error) {
     console.error("Meeting suggestion error:", error);
