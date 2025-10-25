@@ -1,0 +1,121 @@
+{
+  "master": {
+    "tasks": [
+      {
+        "id": 1,
+        "title": "Reorganize Swift sources into PRD-aligned module directories",
+        "description": "Restructure the iOS target to follow the Services/Models/Views hierarchy outlined in the PRD while preserving build settings and dependencies.",
+        "details": "Implementation notes:\n- Create nested groups in Xcode and matching folders on disk (e.g., `messageai-swift/Services/Messaging/MessageService.swift`).\n- Update project references in `project.pbxproj` after moving files to avoid orphaned sources.\n- Split large composites (e.g., `Models.swift`, `ChatView.swift`) into feature-focused files under their new folders, keeping <300 lines per file.\nPseudo-code:\n```\nfor file in legacyFiles {\n    let destination = mapping[file]\n    moveFile(file, to: destination)\n    updatePBXBuildFile(file, newPath: destination)\n}\n```\n- Ensure imports resolve after relocation; add `@_exported` modules if shared helpers are extracted.",
+        "testStrategy": "Build the iOS target in Xcode and via `xcodebuild` to confirm references compile; run a smoke UI test to catch resource path regressions.",
+        "priority": "medium",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": []
+      },
+      {
+        "id": 2,
+        "title": "Adopt MessageDeliveryState schema across models and Firestore payloads",
+        "description": "Replace the current DeliveryStatus enum and Firestore keys with the PRD-specified MessageDeliveryState values and data model.",
+        "details": "Implementation notes:\n- Introduce `MessageDeliveryState` enum: `.pending`, `.sent`, `.delivered`, `.read`, `.failed` plus mapping helpers.\n- Update `MessageEntity` to store a `deliveryStateRawValue` with migration logic to translate legacy `deliveryStatus` fields.\n- Adjust Firestore serialization/deserialization to read/write `deliveryState` while still tolerating `deliveryStatus` during rollout.\nPseudo-code:\n```\nenum MessageDeliveryState: String { case pending, sent, delivered, read, failed }\nmessage.deliveryState = MessageDeliveryState(rawValue: raw) ?? .sent\nlet payload[\"deliveryState\"] = state.rawValue\n```\n- Update TypeScript models or shared constants if Kotlin/TS clients consume the same field names.",
+        "testStrategy": "Extend `MessageEntityTests` to cover the new enum cases, legacy-to-new migration, and Codable round-trips for each state.",
+        "priority": "medium",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": []
+      },
+      {
+        "id": 3,
+        "title": "Implement delivery state transitions and read receipt writes in MessagingService",
+        "description": "Encode the PRD transition logic within MessagingService, including optimistic pending state, sent confirmation, delivered/read detection, and failure handling.",
+        "details": "Implementation notes:\n- When creating a message, insert with `deliveryState = .pending` and update to `.sent` after Firestore writes succeed; on publish error, mark `.failed` and expose retry helper.\n- On snapshot updates, compute `.delivered` when any `readBy` entry exists for recipients, `.read` when non-sender entries include server timestamps.\n- Batch read receipt updates on conversation open using `FieldValue.serverTimestamp()` per recipient, respecting Firestore rule constraints.\nPseudo-code:\n```\nTask {\n    do {\n        try await messageRef.setData(payload)\n        await markState(messageId, .sent)\n    } catch {\n        await markState(messageId, .failed)\n    }\n}\nif shouldMarkDelivered { updateMessageState(.delivered) }\nif readBy.keys.contains(where: { $0 != senderId }) { updateMessageState(.read) }\n```\n- Ensure background listeners avoid race conditions by debouncing state updates and using `async let` for parallel metadata refresh.",
+        "testStrategy": "Add unit tests around MessagingService mocks simulating Firestore callbacks to verify state transitions, retry path, and `readBy` writes; run integration tests with Firebase emulator if available.",
+        "priority": "medium",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": []
+      },
+      {
+        "id": 4,
+        "title": "Revamp message cell UI for new delivery indicators and retry UX",
+        "description": "Update ChatView message rendering to match PRD visuals for pending, sent, delivered, read, and failed states including retry affordances.",
+        "details": "Implementation notes:\n- Replace current multi-checkmark approach with state-driven icons: animated gray single check for `.pending`, blue single for `.sent`, double blue (light+bold overlay) for `.delivered`, bold double for `.read`, red exclamation circle with tap-to-retry for `.failed`.\n- Add `Retry` button or tap action calling `MessagingService.retryMessage(_:)` for failed messages.\n- Highlight read status for group chats: display reader count or tooltip listing `readBy` names.\nPseudo-code:\n```\nswitch message.deliveryState {\n  case .pending: PendingCheckmarkView().progress()\n  case .sent: Image(\"checkmark\").foregroundStyle(.blue)\n  case .delivered: DoubleCheckView(weight: .regular)\n  case .read: DoubleCheckView(weight: .bold)\n  case .failed: Button(action: retry) { Image(\"exclamationmark.circle.fill\").foregroundStyle(.red) }\n}\n```\n- Ensure accessibility labels describe state transitions and retry instructions.",
+        "testStrategy": "Snapshot the message bubble view in SwiftUI previews/tests for each state; add UITests tapping failed bubbles to trigger retry and verify state changes.",
+        "priority": "medium",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": []
+      },
+      {
+        "id": 5,
+        "title": "Implement typing status data layer with expiration semantics",
+        "description": "Create a dedicated TypingStatusService that reads and writes typing presence to Firestore with 5-second auto-clear logic.",
+        "details": "Implementation notes:\n- Define `TypingStatus` model with `isTyping`, `lastUpdated`, `expiresAt` values using server timestamps.\n- Provide APIs: `setTyping(conversationId:isTyping:)`, `listen(conversationId:)`, and cleanup (remove on deinit).\n- Use a background `Task` to auto-clear local typing after 5s of inactivity and issue Firestore `updateData([\"isTyping\": false])` if still active.\nPseudo-code:\n```\nactor TypingStatusService {\n   func setTyping(...) async {\n       let now = Timestamp(date: Date())\n       try await typingDoc.setData([\n           \"isTyping\": isTyping,\n           \"lastUpdated\": FieldValue.serverTimestamp(),\n           \"expiresAt\": FieldValue.serverTimestamp().adding(5s)\n       ], merge: true)\n   }\n   func listen(...) -> AsyncStream<[TypingIndicator]> { ... }\n}\n```\n- Ensure listeners filter out expired statuses client-side to avoid flicker.",
+        "testStrategy": "Add unit tests with mocked Firestore to verify status expiry, multiple concurrent typers, and cleanup; consider integration tests using the Firestore emulator.",
+        "priority": "medium",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": []
+      },
+      {
+        "id": 6,
+        "title": "Render real-time multi-user typing indicators in ChatView",
+        "description": "Update ChatView to consume TypingStatusService streams and display animated typing bubbles per active user per PRD.",
+        "details": "Implementation notes:\n- Inject TypingStatusService via Environment, subscribe using `@State`/`task` to `AsyncStream` updates.\n- For group chats, render stacked/scrollable bubbles with participant names; for 1:1 show a single bubble anchored above composer.\n- Animate fade in/out with `.transition(.opacity.combined(with: .move))` and ensure conversation scroll adjusts to keep bubble visible.\nPseudo-code:\n```\n.typingIndicatorsView:\nForEach(activeTypers) { typer in\n   TypingBubble(name: typer.displayName)\n       .transition(.opacity)\n}\n.task {\n   for await statuses in typingService.listen(conversationId) {\n       activeTypers = statuses.filter { $0.userId != currentUser.id }\n   }\n}\n```\n- Use `DispatchSourceTimer` or `Task.sleep` to remove entries when `expiresAt` < `Date()`.",
+        "testStrategy": "UI snapshot tests covering 1, 2, and 3 active typers; UITest simulating typing (via service mock) verifying fade animation and removal after timeout.",
+        "priority": "medium",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": []
+      },
+      {
+        "id": 7,
+        "title": "Introduce NetworkSimulator service with persisted debug settings",
+        "description": "Create a NetworkSimulator that models WiFi toggle, latency bands, and packet loss probabilities with optional UserDefaults persistence.",
+        "details": "Implementation notes:\n- Define `NetworkCondition` enum (.normal, .poor, .veryPoor, .offline) with associated latency ranges and packet loss odds.\n- Wrap async operations (`execute(_:) async throws`) injecting random delays via `try await Task.sleep` and throwing artificial errors for packet loss/offline.\n- Persist last-used settings in `UserDefaults` keyed by debug build; expose `@Published` state for UI bindings.\nPseudo-code:\n```\nstruct NetworkConditionProfile { let latencyRange: ClosedRange<Double>; let dropRate: Double }\nfunc execute<T>(_ operation: () async throws -> T) async throws -> T {\n   guard wifiEnabled else { throw NetworkError.offline }\n   let delay = Double.random(in: condition.latencyRange)\n   try await Task.sleep(nanoseconds: delay.toNanos)\n   if Double.random(in: 0...1) < condition.dropRate { throw NetworkError.simulatedFailure }\n   return try await operation()\n}\n```\n- Provide Combine/Observation-friendly publishers for condition changes.",
+        "testStrategy": "Unit tests seeding RNG to verify latency bounds and failure rates; ensure persistence round-trips through UserDefaults.",
+        "priority": "medium",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": []
+      },
+      {
+        "id": 8,
+        "title": "Apply network simulation to Firebase services and messaging flows",
+        "description": "Route Firestore and MessagingService operations through the NetworkSimulator to honor debug connectivity settings.",
+        "details": "Implementation notes:\n- Inject NetworkSimulator into FirestoreService and MessagingService; wrap network calls (reads, writes, listeners where feasible) in `await networkSimulator.execute { ... }`.\n- Ensure listener registration remains instantaneous but individual document fetches and writes respect latency/packet loss.\n- Handle simulator-induced errors by surfacing UI banners or leveraging retry policies where appropriate.\nPseudo-code:\n```\ntry await networkSimulator.execute {\n    try await messageRef.setData(payload)\n}\nlistener = try await networkSimulator.attachListener(collectionRef) { snapshot in ... }\n```\n- Cache simulator state per session and sync with DebugView controls.",
+        "testStrategy": "Add service-level tests using a stub NetworkSimulator to confirm delays and failure propagation; run manual QA toggling modes while sending messages to verify UX.",
+        "priority": "medium",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": []
+      },
+      {
+        "id": 9,
+        "title": "Enhance DebugView with database usage tracking and connectivity controls",
+        "description": "Update DebugView to show tool usage metadata, network toggles, and status indicators per PRD.",
+        "details": "Implementation notes:\n- Track tool invocations in-memory with optional UserDefaults persistence, storing `lastUsedAt` per tool and showing separators only for tools used in current session.\n- Add a Connectivity section with WiFi toggle, segmented control for network condition, and a status dot (green/yellow/red) bound to simulator state.\n- Display last-used timestamps under tool names using `RelativeDateTimeFormatter`.\nPseudo-code:\n```\n@State private var toolUsage = DebugToolUsageStore()\nButton(\"Recreate Bots\") { toolUsage.markUsed(.recreateBots) }\nif toolUsage.wasUsedInSession(tool) { Divider() }\nConnectivityControls(networkSimulator: simulator)\nStatusDot(color: simulator.statusIndicator)\n```\n- Persist simulator settings on change and reload when DebugView appears.",
+        "testStrategy": "Write SwiftUI unit tests (ViewInspector) ensuring separators appear only after tool use; manual QA verifying controls persist across launches.",
+        "priority": "medium",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": []
+      },
+      {
+        "id": 10,
+        "title": "Expand automated test coverage for delivery states, typing, and network simulation",
+        "description": "Augment the XCTest suite to validate new infrastructure and prevent regressions.",
+        "details": "Implementation notes:\n- Add tests to `DeliveryStatusTests` covering `.pending`/`.failed` and state transition helpers.\n- Create new `TypingStatusServiceTests` verifying 5-second expiry and multiple typers.\n- Introduce network simulation tests ensuring latency/packet loss behavior is deterministic with seeded RNG.\nPseudo-code:\n```\nfunc testPendingToSentTransition() async {\n   let service = makeMessagingService(simulator: .noDelay)\n   await service.handleSentAck(messageId)\n   XCTAssertEqual(message.deliveryState, .sent)\n}\n```\n- Update UITests to simulate message send failure and confirm retry works, plus toggling debug connectivity.",
+        "testStrategy": "Run `xcodebuild test` for unit/UI targets; capture coverage reports ensuring new code paths are exercised.",
+        "priority": "medium",
+        "dependencies": [],
+        "status": "pending",
+        "subtasks": []
+      }
+    ],
+    "metadata": {
+      "created": "2025-10-25T01:21:19.303Z",
+      "updated": "2025-10-25T02:34:05.243Z",
+      "description": "Tasks for master context"
+    }
+  }
+}

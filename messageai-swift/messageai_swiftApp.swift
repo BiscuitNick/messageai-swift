@@ -19,12 +19,24 @@ struct messageai_swiftApp: App {
     @State private var messagingService: MessagingService
     @State private var notificationService: NotificationService
     @State private var networkMonitor: NetworkMonitor
+    @State private var aiFeaturesService: AIFeaturesService
+    @State private var typingStatusService: TypingStatusService
+    @State private var networkSimulator: NetworkSimulator
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
             UserEntity.self,
             BotEntity.self,
             ConversationEntity.self,
             MessageEntity.self,
+            ThreadSummaryEntity.self,
+            ActionItemEntity.self,
+            SearchResultEntity.self,
+            RecentQueryEntity.self,
+            DecisionEntity.self,
+            MeetingSuggestionEntity.self,
+            SchedulingSuggestionSnoozeEntity.self,
+            CoordinationInsightEntity.self,
+            ProactiveAlertEntity.self,
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
@@ -39,12 +51,15 @@ struct messageai_swiftApp: App {
         FirebaseApp.configure()
         let firestore = FirestoreService()
         let notification = NotificationService()
-        notification.configure()
+        // Note: NotificationService.configure() is called in ContentView after AIFeaturesService is available
         _firestoreService = State(wrappedValue: firestore)
         _authService = State(wrappedValue: AuthService())
         _messagingService = State(wrappedValue: MessagingService())
         _notificationService = State(wrappedValue: notification)
         _networkMonitor = State(wrappedValue: NetworkMonitor())
+        _aiFeaturesService = State(wrappedValue: AIFeaturesService())
+        _typingStatusService = State(wrappedValue: TypingStatusService())
+        _networkSimulator = State(wrappedValue: NetworkSimulator())
         appDelegate.notificationService = notification
     }
 
@@ -56,6 +71,9 @@ struct messageai_swiftApp: App {
                 .environment(messagingService)
                 .environment(notificationService)
                 .environment(networkMonitor)
+                .environment(aiFeaturesService)
+                .environment(typingStatusService)
+                .environment(networkSimulator)
         }
         .modelContainer(sharedModelContainer)
     }

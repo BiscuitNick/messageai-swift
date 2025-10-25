@@ -32,17 +32,35 @@ final class MessagingService {
     private var currentUserId: String?
     private let botUserId = "dash-bot"  // Legacy bot user ID
     private var notificationService: NotificationService?
+    private var networkSimulator: NetworkSimulator?
     private var isAppInForeground: Bool = true
+
+    // AI Features Callback
+    var onMessageMutation: ((String, String) -> Void)?  // (conversationId, messageId)
 
     init(db: Firestore = Firestore.firestore()) {
         self.db = db
     }
 
-    func configure(modelContext: ModelContext, currentUserId: String, notificationService: NotificationService? = nil) {
+    func configure(modelContext: ModelContext, currentUserId: String, notificationService: NotificationService? = nil, networkSimulator: NetworkSimulator? = nil) {
         self.modelContext = modelContext
         self.currentUserId = currentUserId
         self.notificationService = notificationService
+        self.networkSimulator = networkSimulator
         observeConversations(for: currentUserId)
+    }
+
+    /// Parse delivery state from Firestore data with backward compatibility
+    private static func parseDeliveryState(from data: [String: Any], fallback: MessageDeliveryState = .sent) -> MessageDeliveryState {
+        // Try new field first
+        if let stateRaw = data["deliveryState"] as? String {
+            return MessageDeliveryState(fromLegacy: stateRaw)
+        }
+        // Fall back to legacy field
+        if let statusRaw = data["deliveryState"] as? String {
+            return MessageDeliveryState(fromLegacy: statusRaw)
+        }
+        return fallback
     }
 
     func setAppInForeground(_ isInForeground: Bool) {
@@ -58,6 +76,7 @@ final class MessagingService {
         pendingMessageTasks.values.forEach { $0.cancel() }
         pendingMessageTasks.removeAll()
         currentUserId = nil
+        onMessageMutation = nil
     }
 
     func createConversation(with participants: [String], isGroup: Bool = false, groupName: String? = nil) async throws -> String {
@@ -205,7 +224,7 @@ final class MessagingService {
             "senderId": prefixedBotId,
             "text": welcomeText,
             "timestamp": Timestamp(date: now),
-            "deliveryStatus": DeliveryStatus.delivered.rawValue,
+            "deliveryState": MessageDeliveryState.delivered.rawValue,
             "updatedAt": FieldValue.serverTimestamp()
         ])
 
@@ -216,7 +235,7 @@ final class MessagingService {
             senderId: prefixedBotId,
             text: welcomeText,
             timestamp: now,
-            deliveryStatus: .delivered,
+            deliveryState: .delivered,
             readReceipts: [prefixedBotId: now],
             updatedAt: now
         )
@@ -390,7 +409,7 @@ final class MessagingService {
                 "senderId": botUserId,
                 "text": welcomeText,
                 "timestamp": Timestamp(date: now),
-                "deliveryStatus": DeliveryStatus.delivered.rawValue,
+                "deliveryState": MessageDeliveryState.delivered.rawValue,
                 "updatedAt": FieldValue.serverTimestamp()
             ])
 
@@ -446,7 +465,7 @@ final class MessagingService {
                 "senderId": botUserId,
                 "text": welcomeText,
                 "timestamp": Timestamp(date: now),
-                "deliveryStatus": DeliveryStatus.delivered.rawValue,
+                "deliveryState": MessageDeliveryState.delivered.rawValue,
                 "updatedAt": FieldValue.serverTimestamp()
             ])
             messageDoc = try await messageRef.getDocument()
@@ -456,7 +475,7 @@ final class MessagingService {
         let messageTimestamp = (messageData["timestamp"] as? Timestamp)?.dateValue() ?? now
         let messageText = messageData["text"] as? String ?? welcomeText
         let messageSenderId = messageData["senderId"] as? String ?? botUserId
-        let messageStatusRaw = messageData["deliveryStatus"] as? String ?? DeliveryStatus.delivered.rawValue
+        let messageStatusRaw = messageData["deliveryState"] as? String ?? MessageDeliveryState.delivered.rawValue
         let messageStatus = DeliveryStatus(rawValue: messageStatusRaw) ?? .delivered
         let messageReadReceipts = Self.parseReadReceipts(
             from: messageData,
@@ -470,7 +489,7 @@ final class MessagingService {
             senderId: messageSenderId,
             text: messageText,
             timestamp: messageTimestamp,
-            deliveryStatus: messageStatus,
+            deliveryState: messageStatus.toDeliveryState,
             readReceipts: messageReadReceipts
         )
 
@@ -544,7 +563,7 @@ final class MessagingService {
                 "senderId": primarySample.id,
                 "text": demoMessageText,
                 "timestamp": Timestamp(date: now),
-                "deliveryStatus": DeliveryStatus.delivered.rawValue,
+                "deliveryState": MessageDeliveryState.delivered.rawValue,
                 "updatedAt": FieldValue.serverTimestamp()
             ])
 
@@ -590,7 +609,7 @@ final class MessagingService {
                 "senderId": primarySample.id,
                 "text": demoMessageText,
                 "timestamp": Timestamp(date: now),
-                "deliveryStatus": DeliveryStatus.delivered.rawValue,
+                "deliveryState": MessageDeliveryState.delivered.rawValue,
                 "updatedAt": FieldValue.serverTimestamp()
             ])
             demoMessageDoc = try await demoMessageRef.getDocument()
@@ -599,7 +618,7 @@ final class MessagingService {
         let demoMessageData = demoMessageDoc.data() ?? [:]
         let demoMessageTimestamp = (demoMessageData["timestamp"] as? Timestamp)?.dateValue() ?? now
         let demoMessageSender = demoMessageData["senderId"] as? String ?? primarySample.id
-        let demoMessageStatusRaw = demoMessageData["deliveryStatus"] as? String ?? DeliveryStatus.delivered.rawValue
+        let demoMessageStatusRaw = demoMessageData["deliveryState"] as? String ?? MessageDeliveryState.delivered.rawValue
         let demoMessageStatus = DeliveryStatus(rawValue: demoMessageStatusRaw) ?? .delivered
         let demoMessageReadReceipts = Self.parseReadReceipts(
             from: demoMessageData,
@@ -614,7 +633,7 @@ final class MessagingService {
             senderId: demoMessageSender,
             text: demoMessageBody,
             timestamp: demoMessageTimestamp,
-            deliveryStatus: demoMessageStatus,
+            deliveryState: demoMessageStatus.toDeliveryState,
             readReceipts: demoMessageReadReceipts
         )
 
@@ -636,13 +655,16 @@ final class MessagingService {
             senderId: currentUserId,
             text: trimmed,
             timestamp: timestamp,
-            deliveryStatus: .sending,
+            deliveryState: .pending,
             readReceipts: [:],
             updatedAt: timestamp
         )
 
         modelContext.insert(optimisticMessage)
         try? modelContext.save()
+
+        // Notify AI Features of new message
+        onMessageMutation?(conversationId, messageId)
 
         let conversationRef = db.collection("conversations").document(conversationId)
         let messageRef = conversationRef.collection("messages").document(messageId)
@@ -652,16 +674,33 @@ final class MessagingService {
             "senderId": currentUserId,
             "text": trimmed,
             "timestamp": Timestamp(date: timestamp),
-            "deliveryStatus": DeliveryStatus.sent.rawValue,
+            "deliveryState": MessageDeliveryState.sent.rawValue,
+            // Legacy field for backward compatibility
+            "deliveryStatus": "sent",
             "updatedAt": FieldValue.serverTimestamp()
         ]
 
         let task = Task { [weak self] in
             do {
-                try await messageRef.setData(payload)
+                // Wrap Firestore setData with network simulation
+                if let simulator = self?.networkSimulator {
+                    try await simulator.execute {
+                        try await messageRef.setData(payload)
+                    }
+                } else {
+                    try await messageRef.setData(payload)
+                }
 
                 // Get current conversation to update lastInteractionByUser
-                let conversationDoc = try await conversationRef.getDocument()
+                let conversationDoc: DocumentSnapshot
+                if let simulator = self?.networkSimulator {
+                    conversationDoc = try await simulator.execute {
+                        try await conversationRef.getDocument()
+                    }
+                } else {
+                    conversationDoc = try await conversationRef.getDocument()
+                }
+
                 var lastInteractionByUser = Self.parseTimestampDictionary(conversationDoc.data()?["lastInteractionByUser"])
                 lastInteractionByUser[currentUserId] = timestamp
 
@@ -671,13 +710,26 @@ final class MessagingService {
                     firestoreInteractionMap[userId] = Timestamp(date: date)
                 }
 
-                try await conversationRef.setData([
-                    "lastMessage": trimmed,
-                    "lastMessageTimestamp": Timestamp(date: timestamp),
-                    "lastSenderId": currentUserId,
-                    "lastInteractionByUser": firestoreInteractionMap,
-                    "updatedAt": FieldValue.serverTimestamp()
-                ], merge: true)
+                // Wrap conversation update with network simulation
+                if let simulator = self?.networkSimulator {
+                    try await simulator.execute {
+                        try await conversationRef.setData([
+                            "lastMessage": trimmed,
+                            "lastMessageTimestamp": Timestamp(date: timestamp),
+                            "lastSenderId": currentUserId,
+                            "lastInteractionByUser": firestoreInteractionMap,
+                            "updatedAt": FieldValue.serverTimestamp()
+                        ], merge: true)
+                    }
+                } else {
+                    try await conversationRef.setData([
+                        "lastMessage": trimmed,
+                        "lastMessageTimestamp": Timestamp(date: timestamp),
+                        "lastSenderId": currentUserId,
+                        "lastInteractionByUser": firestoreInteractionMap,
+                        "updatedAt": FieldValue.serverTimestamp()
+                    ], merge: true)
+                }
 
                 // Update local conversation's lastInteractionByUser for sender
                 await self?.updateLocalSenderInteraction(conversationId: conversationId, userId: currentUserId, timestamp: timestamp, lastMessage: trimmed)
@@ -701,6 +753,9 @@ final class MessagingService {
         let timestamp = Date()
         let messageId = UUID().uuidString
 
+        // Notify AI Features of new bot message
+        onMessageMutation?(conversationId, messageId)
+
         // Create optimistic local message for immediate UI update
         let optimisticMessage = MessageEntity(
             id: messageId,
@@ -708,7 +763,7 @@ final class MessagingService {
             senderId: botUserId,
             text: trimmed,
             timestamp: timestamp,
-            deliveryStatus: .sent,
+            deliveryState: .sent,
             readReceipts: [botUserId: timestamp],
             updatedAt: timestamp
         )
@@ -724,7 +779,7 @@ final class MessagingService {
             "senderId": botUserId,
             "text": trimmed,
             "timestamp": Timestamp(date: timestamp),
-            "deliveryStatus": DeliveryStatus.sent.rawValue,
+            "deliveryState": MessageDeliveryState.sent.rawValue,
             "updatedAt": FieldValue.serverTimestamp()
         ]
 
@@ -952,7 +1007,7 @@ final class MessagingService {
             guard
                 let senderId = data["senderId"] as? String,
                 let text = data["text"] as? String,
-                let statusRaw = data["deliveryStatus"] as? String
+                let statusRaw = data["deliveryState"] as? String
             else {
                 continue
             }
@@ -965,12 +1020,50 @@ final class MessagingService {
                 fallbackTimestamp: timestamp,
                 defaultReader: senderId
             )
-            let status = DeliveryStatus(rawValue: statusRaw) ?? .sent
-            let shouldMarkDelivered: Bool = {
-                guard let currentUserId else { return false }
-                return senderId != currentUserId && status == .sent
+            let status = MessageDeliveryState(fromLegacy: statusRaw)
+
+            // Determine final delivery state based on readReceipts
+            let finalStatus: MessageDeliveryState = {
+                // Keep failed and pending states as-is
+                if status == .failed || status == .pending {
+                    return status
+                }
+
+                // Check if any non-sender users have read the message
+                let nonSenderReaders = readReceipts.keys.filter { $0 != senderId }
+
+                if !nonSenderReaders.isEmpty {
+                    // At least one recipient has read the message
+                    return .read
+                } else if !readReceipts.isEmpty && readReceipts.keys.contains(senderId) {
+                    // Only sender has read receipt - check if message was delivered to others
+                    // For now, if we're receiving it as a non-sender, mark as delivered
+                    if let currentUserId, senderId != currentUserId {
+                        return .delivered
+                    }
+                    return .sent
+                } else {
+                    // No read receipts, keep original status
+                    return status
+                }
             }()
-            let finalStatus: DeliveryStatus = shouldMarkDelivered ? .delivered : status
+
+            // Parse priority metadata
+            let priorityScore = data["priorityScore"] as? Int
+            let priorityLabel = data["priorityLabel"] as? String
+            let priorityRationale = data["priorityRationale"] as? String
+            let priorityAnalyzedAt = (data["priorityAnalyzedAt"] as? Timestamp)?.dateValue()
+
+            // Parse scheduling intent metadata
+            let schedulingIntent = data["schedulingIntent"] as? String
+            let intentConfidence = data["intentConfidence"] as? Double
+            let intentAnalyzedAt = (data["intentAnalyzedAt"] as? Timestamp)?.dateValue()
+            let schedulingKeywords: [String] = {
+                if let keywords = data["schedulingKeywords"] as? [String] {
+                    return keywords
+                }
+                return []
+            }()
 
             var descriptor = FetchDescriptor<MessageEntity>(
                 predicate: #Predicate<MessageEntity> { message in
@@ -984,9 +1077,17 @@ final class MessagingService {
                 if let existing = try? modelContext.fetch(descriptor).first {
                     existing.text = text
                     existing.timestamp = timestamp
-                    existing.deliveryStatus = finalStatus
+                    existing.deliveryState = finalStatus
                     existing.readReceipts = readReceipts
                     existing.updatedAt = updatedAt
+                    existing.priorityScore = priorityScore
+                    existing.priorityLabel = priorityLabel
+                    existing.priorityRationale = priorityRationale
+                    existing.priorityAnalyzedAt = priorityAnalyzedAt
+                    existing.schedulingIntent = schedulingIntent
+                    existing.intentConfidence = intentConfidence
+                    existing.intentAnalyzedAt = intentAnalyzedAt
+                    existing.schedulingKeywords = schedulingKeywords
                 } else {
                     let message = MessageEntity(
                         id: messageId,
@@ -994,9 +1095,17 @@ final class MessagingService {
                         senderId: senderId,
                         text: text,
                         timestamp: timestamp,
-                        deliveryStatus: finalStatus,
+                        deliveryState: finalStatus,
                         readReceipts: readReceipts,
-                        updatedAt: updatedAt
+                        updatedAt: updatedAt,
+                        priorityScore: priorityScore,
+                        priorityLabel: priorityLabel,
+                        priorityRationale: priorityRationale,
+                        priorityAnalyzedAt: priorityAnalyzedAt,
+                        schedulingIntent: schedulingIntent,
+                        intentConfidence: intentConfidence,
+                        intentAnalyzedAt: intentAnalyzedAt,
+                        schedulingKeywords: schedulingKeywords
                     )
                     modelContext.insert(message)
                 }
@@ -1057,11 +1166,11 @@ final class MessagingService {
             let data = change.document.data()
             guard
                 let senderId = data["senderId"] as? String,
-                let statusRaw = data["deliveryStatus"] as? String,
+                let statusRaw = data["deliveryState"] as? String,
                 let currentUserId
             else { continue }
 
-            if senderId != currentUserId, statusRaw == DeliveryStatus.sent.rawValue {
+            if senderId != currentUserId, statusRaw == MessageDeliveryState.sent.rawValue {
                 let messageId = change.document.documentID
                 Task {
                     do {
@@ -1070,7 +1179,7 @@ final class MessagingService {
                             .collection("messages")
                             .document(messageId)
                         try await messageRef.setData([
-                            "deliveryStatus": DeliveryStatus.delivered.rawValue,
+                            "deliveryState": MessageDeliveryState.delivered.rawValue,
                             "updatedAt": FieldValue.serverTimestamp()
                         ], merge: true)
                     } catch {
@@ -1113,7 +1222,7 @@ final class MessagingService {
         descriptor.fetchLimit = 1
 
         if let message = try modelContext.fetch(descriptor).first {
-            message.deliveryStatus = .sent
+            message.deliveryState = .sent
             message.updatedAt = Date()
             try modelContext.save()
         }
@@ -1131,12 +1240,117 @@ final class MessagingService {
         descriptor.fetchLimit = 1
 
         if let message = try? modelContext.fetch(descriptor).first {
-            message.deliveryStatus = .sending
+            message.deliveryState = .failed
             message.updatedAt = Date()
             try? modelContext.save()
         }
 
         pendingMessageTasks.removeValue(forKey: messageId)
+    }
+
+    /// Mark all unread messages in a conversation as read by the current user
+    func markConversationMessagesAsRead(conversationId: String) async throws {
+        guard let currentUserId else {
+            throw MessagingError.dataUnavailable
+        }
+
+        let messagesRef = db.collection("conversations")
+            .document(conversationId)
+            .collection("messages")
+
+        // Get all messages where current user hasn't read yet
+        let snapshot = try await messagesRef.getDocuments()
+
+        let batch = db.batch()
+        var updateCount = 0
+        let maxBatchSize = 500 // Firestore batch limit
+
+        for document in snapshot.documents {
+            let data = document.data()
+            let senderId = data["senderId"] as? String ?? ""
+
+            // Don't mark own messages as read
+            if senderId == currentUserId {
+                continue
+            }
+
+            // Check if current user already read this message
+            let readReceipts = Self.parseReadReceipts(
+                from: data,
+                fallbackTimestamp: Date(),
+                defaultReader: senderId
+            )
+
+            if !readReceipts.keys.contains(currentUserId) {
+                // Mark as read
+                let messageRef = messagesRef.document(document.documentID)
+                batch.updateData([
+                    "readReceipts.\(currentUserId)": FieldValue.serverTimestamp(),
+                    "deliveryState": MessageDeliveryState.read.rawValue,
+                    "updatedAt": FieldValue.serverTimestamp()
+                ], forDocument: messageRef)
+
+                updateCount += 1
+
+                // Firestore has a 500 operation limit per batch
+                if updateCount >= maxBatchSize {
+                    break
+                }
+            }
+        }
+
+        if updateCount > 0 {
+            try await batch.commit()
+        }
+    }
+
+    /// Retry sending a failed message
+    func retryFailedMessage(messageId: String) async throws {
+        guard let modelContext, let currentUserId else {
+            throw MessagingError.dataUnavailable
+        }
+
+        var descriptor = FetchDescriptor<MessageEntity>(
+            predicate: #Predicate<MessageEntity> { message in
+                message.id == messageId
+            }
+        )
+        descriptor.fetchLimit = 1
+
+        guard let message = try modelContext.fetch(descriptor).first,
+              message.deliveryState == .failed else {
+            return
+        }
+
+        // Mark as pending again
+        message.deliveryState = .pending
+        message.updatedAt = Date()
+        try modelContext.save()
+
+        let conversationRef = db.collection("conversations").document(message.conversationId)
+        let messageRef = conversationRef.collection("messages").document(messageId)
+
+        let payload: [String: Any] = [
+            "conversationId": message.conversationId,
+            "senderId": message.senderId,
+            "text": message.text,
+            "timestamp": Timestamp(date: message.timestamp),
+            "deliveryState": MessageDeliveryState.sent.rawValue,
+            // Legacy field for backward compatibility
+            "deliveryStatus": "sent",
+            "updatedAt": FieldValue.serverTimestamp()
+        ]
+
+        let task = Task { [weak self] in
+            do {
+                try await messageRef.setData(payload)
+                try await self?.markMessageAsSent(messageId: messageId)
+            } catch {
+                await self?.markMessageAsFailed(messageId: messageId)
+            }
+        }
+
+        pendingMessageTasks[messageId] = task
     }
 
 
@@ -1247,7 +1461,7 @@ final class MessagingService {
         senderId: String,
         text: String,
         timestamp: Date,
-        deliveryStatus: DeliveryStatus,
+        deliveryState: MessageDeliveryState,
         readReceipts: [String: Date]
     ) throws {
         guard let modelContext else { return }
@@ -1264,7 +1478,7 @@ final class MessagingService {
             existing.senderId = senderId
             existing.text = text
             existing.timestamp = timestamp
-            existing.deliveryStatus = deliveryStatus
+            existing.deliveryState = deliveryState
             existing.readReceipts = readReceipts
             existing.updatedAt = timestamp
         } else {
@@ -1274,7 +1488,7 @@ final class MessagingService {
                 senderId: senderId,
                 text: text,
                 timestamp: timestamp,
-                deliveryStatus: deliveryStatus,
+                deliveryState: deliveryState,
                 readReceipts: readReceipts,
                 updatedAt: timestamp
             )

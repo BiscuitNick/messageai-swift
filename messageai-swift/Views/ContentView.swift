@@ -21,6 +21,10 @@ struct ContentView: View {
     @Environment(FirestoreService.self) private var firestoreService
     @Environment(MessagingService.self) private var messagingService
     @Environment(NotificationService.self) private var notificationService
+    @Environment(NetworkMonitor.self) private var networkMonitor
+    @Environment(AIFeaturesService.self) private var aiFeaturesService
+    @Environment(TypingStatusService.self) private var typingStatusService
+    @Environment(NetworkSimulator.self) private var networkSimulator
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
     @State private var hasConfiguredContext = false
@@ -63,6 +67,14 @@ struct ContentView: View {
         .task {
             guard !hasConfiguredContext else { return }
             authService.configure(modelContext: modelContext, firestoreService: firestoreService)
+            aiFeaturesService.configure(
+                modelContext: modelContext,
+                authService: authService,
+                messagingService: messagingService,
+                firestoreService: firestoreService,
+                networkMonitor: networkMonitor
+            )
+            notificationService.configure(aiFeaturesService: aiFeaturesService)
             firestoreService.startUserListener(modelContext: modelContext)
             firestoreService.startBotListener(modelContext: modelContext)
             hasStartedUserListener = true
@@ -77,7 +89,12 @@ struct ContentView: View {
                 print("❌ Failed to ensure bot exists: \(error.localizedDescription)")
             }
             if let userId = authService.currentUser?.id {
-                messagingService.configure(modelContext: modelContext, currentUserId: userId, notificationService: notificationService)
+                messagingService.configure(modelContext: modelContext, currentUserId: userId, notificationService: notificationService, networkSimulator: networkSimulator)
+                typingStatusService.configure(currentUserId: userId)
+                // Wire AI Features message observer
+                messagingService.onMessageMutation = { [weak aiFeaturesService] conversationId, messageId in
+                    aiFeaturesService?.onMessageMutation(conversationId: conversationId, messageId: messageId)
+                }
             }
             await authService.markCurrentUserOnline()
             authService.sceneDidBecomeActive()
@@ -95,6 +112,7 @@ struct ContentView: View {
                         hasStartedBotListener = false
                     }
                     messagingService.reset()
+                    aiFeaturesService.onSignOut()
                     authService.sceneDidEnterBackground()
                     selectedTab = .chats
                     return
@@ -108,7 +126,13 @@ struct ContentView: View {
                     hasStartedBotListener = true
                 }
                 await notificationService.registerForRemoteNotifications()
-                messagingService.configure(modelContext: modelContext, currentUserId: newId, notificationService: notificationService)
+                messagingService.configure(modelContext: modelContext, currentUserId: newId, notificationService: notificationService, networkSimulator: networkSimulator)
+                typingStatusService.configure(currentUserId: newId)
+                // Wire AI Features message observer
+                messagingService.onMessageMutation = { [weak aiFeaturesService] conversationId, messageId in
+                    aiFeaturesService?.onMessageMutation(conversationId: conversationId, messageId: messageId)
+                }
+                aiFeaturesService.onSignIn()
                 await authService.markCurrentUserOnline()
                 authService.sceneDidBecomeActive()
                 selectedTab = .chats
@@ -120,11 +144,25 @@ struct ContentView: View {
                 case .active:
                     messagingService.setAppInForeground(true)
                     authService.sceneDidBecomeActive()
+                    // Refresh coordination insights when app becomes active
+                    await aiFeaturesService.refreshCoordinationInsights()
                 case .background:
                     messagingService.setAppInForeground(false)
                     authService.sceneDidEnterBackground()
                 default:
                     break
+                }
+            }
+        }
+        .onChange(of: networkMonitor.isConnected) { oldValue, newValue in
+            // When network connectivity returns, process pending work and refresh coordination insights
+            if !oldValue && newValue {
+                Task { @MainActor in
+                    #if DEBUG
+                    print("[ContentView] Network connectivity restored - processing pending work")
+                    #endif
+                    await aiFeaturesService.processPendingSchedulingSuggestions()
+                    await aiFeaturesService.refreshCoordinationInsights()
                 }
             }
         }

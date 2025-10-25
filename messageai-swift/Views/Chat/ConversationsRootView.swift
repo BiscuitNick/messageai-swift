@@ -21,8 +21,10 @@ struct ConversationsRootView: View {
     @Environment(NetworkMonitor.self) private var networkMonitor
 
     @State private var isComposePresented = false
+    @State private var isSmartSearchPresented = false
     @State private var selectedConversationID: String?
     @State private var searchText: String = ""
+    @State private var navigationPath = NavigationPath()
 
     private var selectableUsers: [UserEntity] {
         users.filter { $0.id != currentUser.id }
@@ -37,7 +39,7 @@ struct ConversationsRootView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             Group {
                 if filteredConversations.isEmpty {
                     if conversations.isEmpty {
@@ -72,7 +74,29 @@ struct ConversationsRootView: View {
                 }
             }
             .navigationTitle("Chats")
+            .navigationDestination(for: SearchNavigationTarget.self) { target in
+                // Handle navigation from search results
+                if let conversation = conversations.first(where: { $0.id == target.conversationId }) {
+                    ChatView(
+                        conversation: conversation,
+                        currentUser: currentUser,
+                        scrollToMessageId: target.messageId
+                    )
+                } else {
+                    // Conversation not found - show error or placeholder
+                    Text("Conversation not found")
+                        .foregroundStyle(.secondary)
+                }
+            }
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        isSmartSearchPresented = true
+                    } label: {
+                        Image(systemName: "sparkle.magnifyingglass")
+                    }
+                }
+
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         isComposePresented = true
@@ -90,6 +114,12 @@ struct ConversationsRootView: View {
             ) { conversationId in
                 selectedConversationID = conversationId
                 isComposePresented = false
+            }
+        }
+        .sheet(isPresented: $isSmartSearchPresented) {
+            SmartSearchView { target in
+                isSmartSearchPresented = false
+                navigationPath.append(target)
             }
         }
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search chats")

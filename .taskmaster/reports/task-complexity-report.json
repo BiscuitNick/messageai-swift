@@ -1,0 +1,93 @@
+{
+	"meta": {
+		"generatedAt": "2025-10-25T01:26:18.106Z",
+		"tasksAnalyzed": 10,
+		"totalTasks": 10,
+		"analysisCount": 10,
+		"thresholdScore": 5,
+		"projectName": "Taskmaster",
+		"usedResearch": false
+	},
+	"complexityAnalysis": [
+		{
+			"taskId": 1,
+			"taskTitle": "Reorganize Swift sources into PRD-aligned module directories",
+			"complexityScore": 7,
+			"recommendedSubtasks": 6,
+			"expansionPrompt": "Break this task into subtasks that inventory existing Swift sources, define the Services/Models/Views folder plan, move files and assets into the new structure with matching disk folders, update Xcode project references, split oversized composites, and re-run builds/UI smoke tests.",
+			"reasoning": "Most core files are still sitting in the project root (for example `messageai-swift/ChatView.swift:1` and `messageai-swift/Services/MessagingService.swift:1`), and several of them exceed a few hundred lines (`messageai-swift/ChatView.swift:863`). Moving dozens of sources while keeping SwiftData models and Firebase resources wired up requires careful PBX updates and regression testing, so the migration is moderately high effort."
+		},
+		{
+			"taskId": 2,
+			"taskTitle": "Adopt MessageDeliveryState schema across models and Firestore payloads",
+			"complexityScore": 6,
+			"recommendedSubtasks": 5,
+			"expansionPrompt": "Create subtasks for defining the new MessageDeliveryState enum, updating MessageEntity storage/migration, adjusting Firestore serialization/deserialization for dual-field compatibility, coordinating any shared constants, and refreshing unit tests.",
+			"reasoning": "Message persistence still relies on a four-case `DeliveryStatus` enum (`messageai-swift/Models.swift:279`), and Firestore writes the old `deliveryStatus` field directly from the send flow (`messageai-swift/Services/MessagingService.swift:657`). Test suites such as `messageai-swiftTests/DeliveryStatusTests.swift:12` bake in the legacy values, so introducing the new schema plus migration/compat layers is a multi-step but contained effort."
+		},
+		{
+			"taskId": 3,
+			"taskTitle": "Implement delivery state transitions and read receipt writes in MessagingService",
+			"complexityScore": 8,
+			"recommendedSubtasks": 6,
+			"expansionPrompt": "Outline subtasks to cover optimistic pending insertion, sent/delivered/read transition handling from Firestore snapshots, failure paths with retry hooks, debounced listener updates, read receipt batching, and comprehensive service tests or emulator runs.",
+			"reasoning": "Messaging currently flips only between `.sending` and `.sent` and even marks failures back to `.sending` (`messageai-swift/Services/MessagingService.swift:628` and `messageai-swift/Services/MessagingService.swift:1167`). Building the full PRD state machine with listener-driven updates, retries, and batched read receipts will touch async flows, concurrency, and Firestore interactions, making this a high-complexity change."
+		},
+		{
+			"taskId": 4,
+			"taskTitle": "Revamp message cell UI for new delivery indicators and retry UX",
+			"complexityScore": 6,
+			"recommendedSubtasks": 4,
+			"expansionPrompt": "Create subtasks for designing assets/state mapping, updating message metadata rows to new icons and retry affordances, enriching group read receipts, and adding accessibility plus snapshot/UITest coverage.",
+			"reasoning": "The bubble metadata currently renders a minimal icon only for `.sending` and falls back to generic checkmarks (`messageai-swift/ChatView.swift:889` and `messageai-swift/ChatView.swift:946`). Replacing this with distinct animated states, retry actions, and group read count tooling requires non-trivial SwiftUI refactoring and visual validation."
+		},
+		{
+			"taskId": 5,
+			"taskTitle": "Implement typing status data layer with expiration semantics",
+			"complexityScore": 7,
+			"recommendedSubtasks": 5,
+			"expansionPrompt": "Plan subtasks for defining the TypingStatus model, implementing Firestore read/write APIs with expiry logic, managing local 5-second timers/cleanup, integrating lifecycle hooks, and building unit tests with mocked Firestore.",
+			"reasoning": "Typing feedback today is a simple local boolean meant for bots (`messageai-swift/ChatView.swift:35` and `messageai-swift/ChatView.swift:433`), so introducing a dedicated service demands new models, Firestore coordination, actors/timers, and teardown semantics. The combination of async Firestore work and expiry guarantees makes this a fairly involved subsystem."
+		},
+		{
+			"taskId": 6,
+			"taskTitle": "Render real-time multi-user typing indicators in ChatView",
+			"complexityScore": 6,
+			"recommendedSubtasks": 4,
+			"expansionPrompt": "Break this task into subtasks handling TypingStatusService injection, state management for active typers, SwiftUI layout/animation for individual and group bubbles, and UI tests or previews that validate fade/timeout behaviors.",
+			"reasoning": "ChatView will need to replace the current single `isBotTyping` flag with streamed data and multi-user layouts (`messageai-swift/ChatView.swift:249` and `messageai-swift/ChatView.swift:472`). Coordinating async streams, transitions, and group presentation is moderate complexity, especially once tied to scroll positioning and accessibility."
+		},
+		{
+			"taskId": 7,
+			"taskTitle": "Introduce NetworkSimulator service with persisted debug settings",
+			"complexityScore": 7,
+			"recommendedSubtasks": 5,
+			"expansionPrompt": "Draft subtasks to define latency/drop profiles, implement the async execute wrapper with seeded randomness, add persistence and publishers for simulator state, expose debug controls, and author deterministic unit tests.",
+			"reasoning": "Networking support is currently limited to a reachability monitor (`messageai-swift/Services/NetworkMonitor.swift:1`), so building a simulator entails new condition models, async wrappers, persistence, and observable state. Ensuring deterministic tests around random latency/drop behavior adds to the implementation load."
+		},
+		{
+			"taskId": 8,
+			"taskTitle": "Apply network simulation to Firebase services and messaging flows",
+			"complexityScore": 7,
+			"recommendedSubtasks": 5,
+			"expansionPrompt": "Create subtasks for injecting the simulator into FirestoreService/MessagingService, wrapping reads/writes/listeners appropriately, handling simulated errors in UI flows, syncing with debug controls, and validating with targeted service tests.",
+			"reasoning": "Current Firestore calls execute directly without abstraction (`messageai-swift/Services/MessagingService.swift:657` and `messageai-swift/Services/FirestoreService.swift:514`), so threading a simulator through async pipelines, listeners, and retry paths is non-trivial. Coordinating error surfacing and maintaining responsiveness pushes the effort into the higher range."
+		},
+		{
+			"taskId": 9,
+			"taskTitle": "Enhance DebugView with database usage tracking and connectivity controls",
+			"complexityScore": 5,
+			"recommendedSubtasks": 4,
+			"expansionPrompt": "Plan subtasks for tracking tool usage history, wiring in simulator-backed connectivity controls with persistence, rendering status indicators, and adding ViewInspector coverage or manual QA steps.",
+			"reasoning": "DebugView is presently a static list of maintenance actions (`messageai-swift/DebugView.swift:36`) with no notion of tool history or network controls. Augmenting it requires new state storage and bindings to the future simulator, but the scope is confined to SwiftUI plumbing, keeping complexity moderate."
+		},
+		{
+			"taskId": 10,
+			"taskTitle": "Expand automated test coverage for delivery states, typing, and network simulation",
+			"complexityScore": 6,
+			"recommendedSubtasks": 5,
+			"expansionPrompt": "Outline subtasks for extending delivery state unit tests, creating TypingStatusService test doubles, adding deterministic NetworkSimulator tests, updating UITests for retry flows and connectivity toggles, and integrating coverage reporting.",
+			"reasoning": "Existing tests validate only the four legacy delivery statuses (`messageai-swiftTests/DeliveryStatusTests.swift:12`) and make no mention of typing or simulated network layers. Adding targeted async/unit/UITests across the new components, potentially with emulator setups, represents a sizable but bounded testing effort."
+		}
+	]
+}

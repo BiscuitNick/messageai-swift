@@ -4,7 +4,7 @@ import * as admin from "firebase-admin";
 import * as https from "firebase-functions/v2/https";
 type CreateBotsHandler = (request: Record<string, unknown>) => Promise<unknown>;
 
-const modulePath = "../index";
+const modulePath = "../bots/index";
 
 function loadCreateBots(): {
   createBots: CreateBotsHandler;
@@ -105,7 +105,7 @@ test("createBots rejects unauthenticated requests", async () => {
   );
 });
 
-test("createBots writes both bot definitions with expected fields", async () => {
+test("createBots writes all bot definitions with expected fields", async () => {
   const {
     createBots,
     collectionCalls,
@@ -117,12 +117,13 @@ test("createBots writes both bot definitions with expected fields", async () => 
   assert.equal(collectionCalls(), 1);
   assert.deepEqual(response, {
     status: "success",
-    created: ["dash-bot", "dad-bot"],
+    created: ["dash-bot", "dad-bot", "brain-bot"],
   });
-  assert.deepEqual(Object.keys(capturedWrites).sort(), ["dad-bot", "dash-bot"]);
+  assert.deepEqual(Object.keys(capturedWrites).sort(), ["brain-bot", "dad-bot", "dash-bot"]);
 
   const dashBot = capturedWrites["dash-bot"];
   const dadBot = capturedWrites["dad-bot"];
+  const brainBot = capturedWrites["brain-bot"];
 
   assert.equal(dashBot.name, "Dash Bot");
   assert.equal(dashBot.category, "general");
@@ -130,9 +131,14 @@ test("createBots writes both bot definitions with expected fields", async () => 
   assert.equal(dadBot.name, "Dad Bot");
   assert.equal(dadBot.category, "humor");
   assert.ok(Array.isArray(dadBot.capabilities));
+  assert.equal(brainBot.name, "Brain Bot");
+  assert.equal(brainBot.category, "productivity");
+  assert.ok(Array.isArray(brainBot.capabilities));
 
   assert.ok("updatedAt" in dashBot);
   assert.ok("createdAt" in dashBot);
   assert.ok("updatedAt" in dadBot);
   assert.ok("createdAt" in dadBot);
+  assert.ok("updatedAt" in brainBot);
+  assert.ok("createdAt" in brainBot);
 });

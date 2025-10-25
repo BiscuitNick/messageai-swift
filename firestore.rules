@@ -74,6 +74,58 @@ service cloud.firestore {
 
         allow delete: if false;
       }
+
+      match /actionItems/{actionItemId} {
+        allow read: if isAuthenticated()
+          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
+
+        allow create, update: if isAuthenticated()
+          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data)
+          && request.resource.data.conversationId == conversationId;
+
+        allow delete: if isAuthenticated()
+          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
+      }
+
+      match /decisions/{decisionId} {
+        allow read: if isAuthenticated()
+          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
+
+        allow create: if isAuthenticated()
+          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data)
+          && request.resource.data.conversationId == conversationId;
+
+        allow update: if isAuthenticated()
+          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
+
+        allow delete: if isAuthenticated()
+          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
+      }
+    }
+
+    // AI Telemetry - authenticated users can write their own telemetry events
+    match /ai_telemetry/{eventId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated()
+                   && request.resource.data.userId == request.auth.uid;
+      allow delete: if false;
+    }
+
+    // AI Feedback - authenticated users can write their own feedback
+    match /ai_feedback/{feedbackId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated()
+                   && request.resource.data.userId == request.auth.uid;
+      allow delete: if false;
+    }
+
+    // Coordination Insights - written by Cloud Functions, read by authenticated users
+    match /coordinationInsights/{insightId} {
+      // Allow authenticated users to read insights
+      // Cloud Functions use Admin SDK which bypasses these rules for writes
+      allow read: if isAuthenticated();
+      allow write: if false; // Client writes blocked - only Cloud Functions can write via Admin SDK
+      allow delete: if false;
     }
   }
 }
