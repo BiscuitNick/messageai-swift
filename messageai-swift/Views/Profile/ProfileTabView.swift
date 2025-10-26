@@ -1,9 +1,9 @@
 import SwiftUI
 
 struct ProfileTabView: View {
-    let currentUser: AuthService.AppUser
+    let currentUser: AuthCoordinator.AppUser
 
-    @Environment(AuthService.self) private var authService
+    @Environment(AuthCoordinator.self) private var authService
     @Environment(MessagingCoordinator.self) private var messagingCoordinator
 
     var body: some View {

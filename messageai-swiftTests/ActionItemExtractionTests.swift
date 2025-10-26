@@ -36,7 +36,7 @@ final class ActionItemExtractionTests: XCTestCase {
         service = AIFeaturesService()
         service.configure(
             modelContext: modelContext,
-            authService: AuthService(),
+            authService: AuthCoordinator(),
             messagingService: MessagingService(),
             firestoreService: FirestoreService(),
             networkMonitor: networkMonitor
@@ -202,7 +202,7 @@ final class ActionItemExtractionTests: XCTestCase {
     // MARK: - Configuration Tests
 
     func testServiceConfiguration() {
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 

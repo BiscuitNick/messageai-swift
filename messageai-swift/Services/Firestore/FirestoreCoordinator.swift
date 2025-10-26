@@ -69,7 +69,7 @@ final class FirestoreCoordinator {
     // MARK: - User Presence
 
     /// Upsert a user to Firestore
-    func upsertUser(_ user: AuthService.AppUser) async throws {
+    func upsertUser(_ user: AuthCoordinator.AppUser) async throws {
         try await userPresenceService.upsertUser(user)
     }
 

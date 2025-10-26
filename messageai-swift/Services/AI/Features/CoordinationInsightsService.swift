@@ -28,7 +28,7 @@ final class CoordinationInsightsService {
     private let functionClient: FirebaseFunctionClient
     private let telemetryLogger: TelemetryLogger
     private let firestore = Firestore.firestore()
-    private weak var authService: AuthService?
+    private weak var authService: AuthCoordinator?
     private weak var modelContext: ModelContext?
     private weak var networkMonitor: NetworkMonitor?
 
@@ -45,7 +45,7 @@ final class CoordinationInsightsService {
     // MARK: - Configuration
 
     func configure(
-        authService: AuthService,
+        authService: AuthCoordinator,
         modelContext: ModelContext,
         networkMonitor: NetworkMonitor
     ) {

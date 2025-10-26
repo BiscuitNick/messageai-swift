@@ -27,7 +27,7 @@ final class UserPresenceService {
     /// Upsert a user to Firestore
     /// - Parameter user: The user to upsert
     /// - Throws: Firestore errors
-    func upsertUser(_ user: AuthService.AppUser) async throws {
+    func upsertUser(_ user: AuthCoordinator.AppUser) async throws {
         let userRef = db.collection("users").document(user.id)
         let snapshot = try await userRef.getDocument()
 

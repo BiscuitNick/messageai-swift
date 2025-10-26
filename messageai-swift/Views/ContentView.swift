@@ -17,10 +17,10 @@ struct ContentView: View {
         case debug
     }
 
-    @Environment(AuthService.self) private var authService
+    @Environment(AuthCoordinator.self) private var authService
     @Environment(FirestoreCoordinator.self) private var firestoreCoordinator
     @Environment(MessagingCoordinator.self) private var messagingCoordinator
-    @Environment(NotificationService.self) private var notificationService
+    @Environment(NotificationCoordinator.self) private var notificationService
     @Environment(NetworkMonitor.self) private var networkMonitor
     @Environment(AIFeaturesCoordinator.self) private var aiCoordinator
     @Environment(TypingStatusService.self) private var typingStatusService

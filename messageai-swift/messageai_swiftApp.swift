@@ -14,10 +14,10 @@ import UserNotifications
 @main
 struct messageai_swiftApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @State private var authService: AuthService
+    @State private var authService: AuthCoordinator
     @State private var firestoreCoordinator: FirestoreCoordinator
     @State private var messagingCoordinator: MessagingCoordinator
-    @State private var notificationService: NotificationService
+    @State private var notificationService: NotificationCoordinator
     @State private var networkMonitor: NetworkMonitor
     @State private var aiCoordinator: AIFeaturesCoordinator
     @State private var typingStatusService: TypingStatusService
@@ -50,10 +50,10 @@ struct messageai_swiftApp: App {
     init() {
         FirebaseApp.configure()
         let firestore = FirestoreCoordinator()
-        let notification = NotificationService()
-        // Note: NotificationService.configure() is called in ContentView after AIFeaturesCoordinator is available
+        let notification = NotificationCoordinator()
+        // Note: NotificationCoordinator.configure() is called in ContentView after AIFeaturesCoordinator is available
         _firestoreCoordinator = State(wrappedValue: firestore)
-        _authService = State(wrappedValue: AuthService())
+        _authService = State(wrappedValue: AuthCoordinator())
         _messagingCoordinator = State(wrappedValue: MessagingCoordinator())
         _notificationService = State(wrappedValue: notification)
         _networkMonitor = State(wrappedValue: NetworkMonitor())
@@ -80,7 +80,7 @@ struct messageai_swiftApp: App {
 }
 
 final class AppDelegate: NSObject, UIApplicationDelegate {
-    var notificationService: NotificationService?
+    var notificationService: NotificationCoordinator?
 
     func application(
         _ application: UIApplication,

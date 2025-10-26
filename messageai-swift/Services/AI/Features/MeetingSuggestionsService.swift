@@ -23,7 +23,7 @@ final class MeetingSuggestionsService {
 
     private let functionClient: FirebaseFunctionClient
     private let telemetryLogger: TelemetryLogger
-    private weak var authService: AuthService?
+    private weak var authService: AuthCoordinator?
     private weak var modelContext: ModelContext?
     private weak var firestoreService: FirestoreCoordinator?
 
@@ -45,7 +45,7 @@ final class MeetingSuggestionsService {
     // MARK: - Configuration
 
     func configure(
-        authService: AuthService,
+        authService: AuthCoordinator,
         modelContext: ModelContext,
         firestoreService: FirestoreCoordinator
     ) {

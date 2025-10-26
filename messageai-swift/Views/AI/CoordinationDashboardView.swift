@@ -439,7 +439,7 @@ struct CoordinationDashboardView: View {
                 nil
             }
 
-            ChatView(conversation: conversation, currentUser: AuthService.AppUser(
+            ChatView(conversation: conversation, currentUser: AuthCoordinator.AppUser(
                 id: currentUser.id,
                 email: currentUser.email,
                 displayName: currentUser.displayName,

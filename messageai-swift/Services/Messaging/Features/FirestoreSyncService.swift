@@ -24,7 +24,7 @@ final class FirestoreSyncService {
     // Dependencies
     private var listenerManager: FirestoreListenerManager?
     private var conversationManager: ConversationManagementService?
-    private var notificationService: NotificationService?
+    private var notificationService: NotificationCoordinator?
 
     // Message listener start times for notification filtering
     private var messageListenerStartTimes: [String: Date] = [:]
@@ -43,7 +43,7 @@ final class FirestoreSyncService {
         currentUserId: String,
         listenerManager: FirestoreListenerManager,
         conversationManager: ConversationManagementService,
-        notificationService: NotificationService? = nil
+        notificationService: NotificationCoordinator? = nil
     ) {
         self.modelContext = modelContext
         self.currentUserId = currentUserId
@@ -229,18 +229,32 @@ final class FirestoreSyncService {
         conversationId: String,
         snapshot: QuerySnapshot?
     ) async {
-        guard let snapshot, let modelContext = modelContext else { return }
+        guard let snapshot, let modelContext = modelContext else {
+            #if DEBUG
+            print("[FirestoreSyncService] handleMessageSnapshot: snapshot or modelContext is nil")
+            #endif
+            return
+        }
+
+        #if DEBUG
+        print("[FirestoreSyncService] Received message snapshot for \(conversationId) with \(snapshot.documents.count) documents, \(snapshot.documentChanges.count) changes")
+        #endif
 
         // First pass: Update all messages
         for change in snapshot.documentChanges {
             let data = change.document.data()
             guard
                 let senderId = data["senderId"] as? String,
-                let text = data["text"] as? String,
-                let statusRaw = data["deliveryState"] as? String
+                let text = data["text"] as? String
             else {
+                #if DEBUG
+                print("[FirestoreSyncService] Skipping message - missing required fields. Data keys: \(data.keys)")
+                #endif
                 continue
             }
+
+            // Support both old (deliveryStatus) and new (deliveryState) field names
+            let statusRaw = (data["deliveryState"] as? String) ?? (data["deliveryStatus"] as? String) ?? "sent"
 
             let messageId = change.document.documentID
             let timestamp = (data["timestamp"] as? Timestamp)?.dateValue() ?? Date()
@@ -305,6 +319,9 @@ final class FirestoreSyncService {
             switch change.type {
             case .added, .modified:
                 if let existing = try? modelContext.fetch(descriptor).first {
+                    #if DEBUG
+                    print("[FirestoreSyncService] Updating existing message: \(messageId)")
+                    #endif
                     existing.text = text
                     existing.timestamp = timestamp
                     existing.deliveryState = finalStatus
@@ -319,6 +336,9 @@ final class FirestoreSyncService {
                     existing.intentAnalyzedAt = intentAnalyzedAt
                     existing.schedulingKeywords = schedulingKeywords
                 } else {
+                    #if DEBUG
+                    print("[FirestoreSyncService] Inserting new message: \(messageId) in conversation: \(conversationId)")
+                    #endif
                     let message = MessageEntity(
                         id: messageId,
                         conversationId: conversationId,
@@ -395,9 +415,11 @@ final class FirestoreSyncService {
             let data = change.document.data()
             guard
                 let senderId = data["senderId"] as? String,
-                let statusRaw = data["deliveryState"] as? String,
                 let currentUserId = currentUserId
             else { continue }
+
+            // Support both old (deliveryStatus) and new (deliveryState) field names
+            let statusRaw = (data["deliveryState"] as? String) ?? (data["deliveryStatus"] as? String)
 
             if senderId != currentUserId, statusRaw == MessageDeliveryState.sent.rawValue {
                 let messageId = change.document.documentID

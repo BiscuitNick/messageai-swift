@@ -10,7 +10,7 @@ import SwiftUI
 import SwiftData
 
 struct ConversationsRootView: View {
-    let currentUser: AuthService.AppUser
+    let currentUser: AuthCoordinator.AppUser
 
     @Query(sort: [SortDescriptor(\ConversationEntity.updatedAt, order: .reverse)])
     private var conversations: [ConversationEntity]
@@ -158,7 +158,7 @@ struct ConversationsRootView: View {
 
 private struct ConversationRow: View {
     let conversation: ConversationEntity
-    let currentUser: AuthService.AppUser
+    let currentUser: AuthCoordinator.AppUser
     let users: [UserEntity]
     let bots: [BotEntity]
     let isOnline: Bool

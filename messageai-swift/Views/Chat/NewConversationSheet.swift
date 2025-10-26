@@ -27,7 +27,7 @@ struct NewConversationSheet: View {
         }
     }
 
-    let currentUser: AuthService.AppUser
+    let currentUser: AuthCoordinator.AppUser
     let availableUsers: [UserEntity]
     let onCreated: (String) -> Void
 
@@ -44,7 +44,7 @@ struct NewConversationSheet: View {
     @Query(filter: #Predicate<BotEntity> { $0.isActive }) private var bots: [BotEntity]
 
     init(
-        currentUser: AuthService.AppUser,
+        currentUser: AuthCoordinator.AppUser,
         availableUsers: [UserEntity],
         initialMode: Mode = .direct,
         onCreated: @escaping (String) -> Void

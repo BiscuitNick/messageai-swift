@@ -49,7 +49,7 @@ final class AIFeaturesCoordinator {
     private var modelContext: ModelContext?
 
     @ObservationIgnored
-    private var authService: AuthService?
+    private var authService: AuthCoordinator?
 
     @ObservationIgnored
     private var messagingService: MessagingCoordinator?
@@ -128,7 +128,7 @@ final class AIFeaturesCoordinator {
     ///   - networkMonitor: Network monitor for connectivity awareness
     func configure(
         modelContext: ModelContext,
-        authService: AuthService,
+        authService: AuthCoordinator,
         messagingService: MessagingCoordinator,
         firestoreCoordinator: FirestoreCoordinator,
         networkMonitor: NetworkMonitor

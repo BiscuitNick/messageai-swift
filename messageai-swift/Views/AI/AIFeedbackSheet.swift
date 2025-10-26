@@ -13,7 +13,7 @@ struct AIFeedbackSheet: View {
     let featureType: String
     let originalContent: String
     @Environment(AIFeaturesCoordinator.self) private var aiCoordinator
-    @Environment(AuthService.self) private var authService
+    @Environment(AuthCoordinator.self) private var authService
     @Environment(\.dismiss) private var dismiss
 
     @State private var rating: Int = 0
@@ -158,5 +158,5 @@ struct AIFeedbackSheet: View {
         originalContent: "Team discussed Q4 roadmap and decided to prioritize feature X for the upcoming release."
     )
     .environment(AIFeaturesCoordinator())
-    .environment(AuthService())
+    .environment(AuthCoordinator())
 }

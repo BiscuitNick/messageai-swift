@@ -5,10 +5,10 @@ import SwiftUI
 import SwiftData
 
 struct DebugView: View {
-    let currentUser: AuthService.AppUser
+    let currentUser: AuthCoordinator.AppUser
 
-    @Environment(AuthService.self) private var authService
-    @Environment(NotificationService.self) private var notificationService
+    @Environment(AuthCoordinator.self) private var authService
+    @Environment(NotificationCoordinator.self) private var notificationService
     @Environment(MessagingCoordinator.self) private var messagingCoordinator
     @Environment(FirestoreCoordinator.self) private var firestoreCoordinator
     @Environment(NetworkSimulator.self) private var networkSimulator

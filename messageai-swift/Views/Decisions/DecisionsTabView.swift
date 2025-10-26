@@ -214,7 +214,7 @@ private struct DecisionRow: View {
 
     @Environment(\.modelContext) private var modelContext
     @Environment(AIFeaturesCoordinator.self) private var aiCoordinator
-    @Environment(NotificationService.self) private var notificationService
+    @Environment(NotificationCoordinator.self) private var notificationService
     @Environment(FirestoreCoordinator.self) private var firestoreCoordinator
 
     @State private var showingReminderPicker = false

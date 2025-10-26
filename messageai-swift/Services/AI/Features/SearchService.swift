@@ -25,7 +25,7 @@ final class SearchService {
 
     private let functionClient: FirebaseFunctionClient
     private let telemetryLogger: TelemetryLogger
-    private weak var authService: AuthService?
+    private weak var authService: AuthCoordinator?
     private weak var modelContext: ModelContext?
 
     // MARK: - Cache
@@ -46,7 +46,7 @@ final class SearchService {
     // MARK: - Configuration
 
     func configure(
-        authService: AuthService,
+        authService: AuthCoordinator,
         modelContext: ModelContext
     ) {
         self.authService = authService

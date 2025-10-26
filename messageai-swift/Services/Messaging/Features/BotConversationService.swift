@@ -164,13 +164,6 @@ final class BotConversationService {
         #endif
     }
 
-    /// Ensure a specific bot conversation exists, create if needed
-    /// - Returns: Conversation ID
-    /// - Throws: MessagingError
-    func ensureBotConversation() async throws -> String {
-        return try await createConversationWithBot(botId: "dash-bot")
-    }
-
     // MARK: - Private Helpers
 
     /// Send welcome message from bot
