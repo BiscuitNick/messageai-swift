@@ -80,32 +80,35 @@ async function analyzeParticipantActivity(
     const conversationsSnapshot = await firestore
       .collection(COLLECTION_CONVERSATIONS)
       .where("participantIds", "array-contains", participantId)
-      .limit(10) // Limit conversations to avoid excessive queries
+      .limit(5) // Reduced from 10 to 5 to improve performance
       .get();
 
-    const participantMessages: Date[] = [];
-
-    // Collect messages from each conversation
-    for (const convDoc of conversationsSnapshot.docs) {
+    // Collect messages from each conversation in parallel
+    const messageQueryPromises = conversationsSnapshot.docs.map(async (convDoc) => {
       const messagesSnapshot = await firestore
         .collection(COLLECTION_CONVERSATIONS)
         .doc(convDoc.id)
         .collection("messages")
         .where("senderId", "==", participantId)
         .orderBy("timestamp", "desc")
-        .limit(50) // Sample recent messages
+        .limit(30) // Reduced from 50 to 30 for better performance
         .get();
 
+      const timestamps: Date[] = [];
       messagesSnapshot.docs.forEach((msgDoc) => {
         const data = msgDoc.data();
         const timestamp = (data.timestamp as admin.firestore.Timestamp)?.toDate();
         if (timestamp) {
-          participantMessages.push(timestamp);
+          timestamps.push(timestamp);
         }
       });
-    }
 
-    return participantMessages;
+      return timestamps;
+    });
+
+    // Wait for all message queries to complete in parallel
+    const participantMessagesArrays = await Promise.all(messageQueryPromises);
+    return participantMessagesArrays.flat();
   });
 
   const allParticipantMessages = await Promise.all(messagePromises);
@@ -145,44 +148,50 @@ async function analyzeParticipantActivity(
 /**
  * Callable function to suggest meeting times based on participant availability
  */
-export const suggestMeetingTimes = onCall<SuggestMeetingTimesRequest>(async (request) => {
-  const uid = requireAuth(request);
-  const { conversationId, participantIds, durationMinutes, preferredDays = 14 } = request.data;
+export const suggestMeetingTimes = onCall<SuggestMeetingTimesRequest>(
+  { timeoutSeconds: 60 }, // Increase timeout to 60 seconds for AI processing
+  async (request) => {
+    const uid = requireAuth(request);
+    const { conversationId, participantIds, durationMinutes, preferredDays = 14 } = request.data;
 
-  if (!conversationId) {
-    throw new HttpsError("invalid-argument", "conversationId is required");
-  }
-
-  if (!participantIds || participantIds.length === 0) {
-    throw new HttpsError("invalid-argument", "participantIds array is required");
-  }
-
-  if (!durationMinutes || durationMinutes <= 0) {
-    throw new HttpsError("invalid-argument", "durationMinutes must be a positive number");
-  }
-
-  console.log(`[suggestMeetingTimes] Suggesting times for ${participantIds.length} participants, ${durationMinutes}min duration`);
-
-  try {
-    // Verify conversation exists and user has access
-    const conversationDoc = await firestore
-      .collection(COLLECTION_CONVERSATIONS)
-      .doc(conversationId)
-      .get();
-
-    if (!conversationDoc.exists) {
-      throw new HttpsError("not-found", "Conversation not found");
+    if (!conversationId) {
+      throw new HttpsError("invalid-argument", "conversationId is required");
     }
 
-    const conversationData = conversationDoc.data();
-    const conversationParticipants = conversationData?.participantIds as string[] || [];
-
-    if (!conversationParticipants.includes(uid)) {
-      throw new HttpsError("permission-denied", "User is not a participant in this conversation");
+    if (!participantIds || participantIds.length === 0) {
+      throw new HttpsError("invalid-argument", "participantIds array is required");
     }
 
-    // Analyze participant activity patterns
-    const activityAnalysis = await analyzeParticipantActivity(participantIds);
+    if (!durationMinutes || durationMinutes <= 0) {
+      throw new HttpsError("invalid-argument", "durationMinutes must be a positive number");
+    }
+
+    const functionStartTime = Date.now();
+    console.log(`[suggestMeetingTimes] Suggesting times for ${participantIds.length} participants, ${durationMinutes}min duration`);
+
+    try {
+      // Verify conversation exists and user has access
+      const conversationDoc = await firestore
+        .collection(COLLECTION_CONVERSATIONS)
+        .doc(conversationId)
+        .get();
+
+      if (!conversationDoc.exists) {
+        throw new HttpsError("not-found", "Conversation not found");
+      }
+
+      const conversationData = conversationDoc.data();
+      const conversationParticipants = conversationData?.participantIds as string[] || [];
+
+      if (!conversationParticipants.includes(uid)) {
+        throw new HttpsError("permission-denied", "User is not a participant in this conversation");
+      }
+
+      // Analyze participant activity patterns
+      const activityStartTime = Date.now();
+      const activityAnalysis = await analyzeParticipantActivity(participantIds);
+      const activityDuration = Date.now() - activityStartTime;
+      console.log(`[suggestMeetingTimes] Activity analysis completed in ${activityDuration}ms`);
 
     // Fetch participant names for context
     const participantNames = await fetchSenderNames(participantIds);
@@ -212,20 +221,19 @@ export const suggestMeetingTimes = onCall<SuggestMeetingTimesRequest>(async (req
 
     const userPrompt = `Suggest ${durationMinutes}-minute meeting times for these participants:\n\n${participantContext}\n\nActivity Analysis:\n- Most active hours (UTC): ${topHours.join(", ")}\n- Most active days: ${topDays.join(", ")}\n- Estimated timezone offset: ${activityAnalysis.activeTimezoneOffset} minutes from UTC\n\nGenerate 3-5 ranked meeting time suggestions within the next ${preferredDays} days.`;
 
-    console.log(`[suggestMeetingTimes] Calling OpenAI with activity patterns: top hours [${topHours}], top days [${topDays}]`);
+      console.log(`[suggestMeetingTimes] Calling OpenAI with activity patterns: top hours [${topHours}], top days [${topDays}]`);
 
-    
-
-    // Call OpenAI for meeting suggestions
-    const { object: response } = await generateObject({
-      model: openai("gpt-4o-mini"),
-      system: systemPrompt,
-      prompt: userPrompt,
-      schema: meetingSuggestionsResponseSchema,
-      temperature: 0.7, // Allow some creativity in suggestions
-    });
-
-    console.log(`[suggestMeetingTimes] Generated ${response.suggestions.length} meeting suggestions`);
+      // Call OpenAI for meeting suggestions
+      const aiStartTime = Date.now();
+      const { object: response } = await generateObject({
+        model: openai("gpt-4o-mini"),
+        system: systemPrompt,
+        prompt: userPrompt,
+        schema: meetingSuggestionsResponseSchema,
+        temperature: 0.7, // Allow some creativity in suggestions
+      });
+      const aiDuration = Date.now() - aiStartTime;
+      console.log(`[suggestMeetingTimes] OpenAI call completed in ${aiDuration}ms, generated ${response.suggestions.length} meeting suggestions`);
 
     // Format response
     const suggestions: MeetingSuggestion[] = response.suggestions.map((s, index) => ({
@@ -237,27 +245,32 @@ export const suggestMeetingTimes = onCall<SuggestMeetingTimesRequest>(async (req
       timeOfDay: s.timeOfDay,
     }));
 
-    // Calculate expiration (suggestions expire in 24 hours)
-    const generatedAt = new Date();
-    const expiresAt = new Date(generatedAt);
-    expiresAt.setHours(expiresAt.getHours() + 24);
+      // Calculate expiration (suggestions expire in 24 hours)
+      const generatedAt = new Date();
+      const expiresAt = new Date(generatedAt);
+      expiresAt.setHours(expiresAt.getHours() + 24);
 
-    return {
-      suggestions,
-      conversation_id: conversationId,
-      duration_minutes: durationMinutes,
-      participant_count: participantIds.length,
-      generated_at: generatedAt.toISOString(),
-      expires_at: expiresAt.toISOString(),
-    };
+      const totalDuration = Date.now() - functionStartTime;
+      console.log(`[suggestMeetingTimes] Function completed successfully in ${totalDuration}ms total`);
 
-  } catch (error) {
-    console.error("Meeting suggestion error:", error);
-    if (error instanceof HttpsError) {
-      throw error;
+      return {
+        suggestions,
+        conversation_id: conversationId,
+        duration_minutes: durationMinutes,
+        participant_count: participantIds.length,
+        generated_at: generatedAt.toISOString(),
+        expires_at: expiresAt.toISOString(),
+      };
+
+    } catch (error) {
+      const totalDuration = Date.now() - functionStartTime;
+      console.error(`[suggestMeetingTimes] Function failed after ${totalDuration}ms:`, error);
+      if (error instanceof HttpsError) {
+        throw error;
+      }
+      throw new HttpsError("internal", "Failed to suggest meeting times", error);
     }
-    throw new HttpsError("internal", "Failed to suggest meeting times", error);
   }
-});
+);
 
 import { fetchSenderNames } from "../core/utils";

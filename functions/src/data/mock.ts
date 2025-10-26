@@ -171,7 +171,7 @@ async function seedConversation({
       senderId: message.senderId,
       text: message.text,
       timestamp: admin.firestore.Timestamp.fromDate(message.timestamp),
-      deliveryStatus: DELIVERY_SENT,
+      deliveryState: DELIVERY_SENT,
       readReceipts,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       // AI metadata fields (null by default, will be populated by triggers)
