@@ -125,7 +125,7 @@ final class MessageSendingService {
 
                 // FirestoreSyncService will handle state transitions based on cache/server status
 
-                // Get current conversation to update lastInteractionByUser
+                // Get current conversation to update lastInteractionByUser and unreadCount
                 let conversationDoc: DocumentSnapshot
                 if let simulator = self?.networkSimulator {
                     conversationDoc = try await simulator.execute {
@@ -146,6 +146,19 @@ final class MessageSendingService {
                     firestoreInteractionMap[userId] = Timestamp(date: date)
                 }
 
+                // Update unread counts for all participants except sender
+                let currentUnreadCounts = conversationDoc.data()?["unreadCount"] as? [String: Int] ?? [:]
+                var updatedUnreadCounts = currentUnreadCounts
+
+                // Increment unread count for all other participants
+                let participantIds = conversationDoc.data()?["participantIds"] as? [String] ?? []
+                for participantId in participantIds {
+                    if participantId != currentUserId {
+                        let currentCount = updatedUnreadCounts[participantId] ?? 0
+                        updatedUnreadCounts[participantId] = currentCount + 1
+                    }
+                }
+
                 // Wrap conversation update with network simulation
                 if let simulator = self?.networkSimulator {
                     try await simulator.execute {
@@ -154,6 +167,7 @@ final class MessageSendingService {
                             "lastMessageTimestamp": Timestamp(date: timestamp),
                             "lastSenderId": currentUserId,
                             "lastInteractionByUser": firestoreInteractionMap,
+                            "unreadCount": updatedUnreadCounts,
                             "updatedAt": FieldValue.serverTimestamp()
                         ], merge: true)
                     }
@@ -163,6 +177,7 @@ final class MessageSendingService {
                         "lastMessageTimestamp": Timestamp(date: timestamp),
                         "lastSenderId": currentUserId,
                         "lastInteractionByUser": firestoreInteractionMap,
+                        "unreadCount": updatedUnreadCounts,
                         "updatedAt": FieldValue.serverTimestamp()
                     ], merge: true)
                 }
