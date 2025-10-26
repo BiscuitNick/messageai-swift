@@ -20,7 +20,7 @@ const coordinationInsightSchema = z.object({
     status: z.enum(["unresolved", "pending", "resolved"]).describe("Status of the action item"),
   })).describe("Action items found in the conversation"),
 
-  staleDacisions: z.array(z.object({
+  staleDecisions: z.array(z.object({
     topic: z.string().describe("Topic of the decision"),
     lastMentioned: z.string().describe("When it was last mentioned"),
     reason: z.string().describe("Why it's considered stale"),
@@ -157,11 +157,19 @@ export async function storeInsights(
   const expiryDate = new Date();
   expiryDate.setDate(expiryDate.getDate() + 7); // Expire after 7 days
 
+  // Flatten insights to root level for Swift compatibility
   const insightDoc = {
     conversationId,
     teamId,
-    insights,
-    createdAt: timestamp,
+    // Flatten insights fields to root level
+    summary: insights.summary,
+    overallHealth: insights.overallHealth,
+    actionItems: insights.actionItems,
+    staleDecisions: insights.staleDecisions,
+    upcomingDeadlines: insights.upcomingDeadlines,
+    schedulingConflicts: insights.schedulingConflicts,
+    blockers: insights.blockers,
+    generatedAt: timestamp, // Use generatedAt to match Swift expectations
     expiresAt: admin.firestore.Timestamp.fromDate(expiryDate),
     updatedAt: timestamp,
   };
@@ -241,7 +249,7 @@ export async function analyzeTeamState(): Promise<TeamAnalysisResult> {
         // Only store if there are meaningful insights
         const hasInsights =
           insights.actionItems.length > 0 ||
-          insights.staleDacisions.length > 0 ||
+          insights.staleDecisions.length > 0 ||
           insights.upcomingDeadlines.length > 0 ||
           insights.schedulingConflicts.length > 0 ||
           insights.blockers.length > 0;
