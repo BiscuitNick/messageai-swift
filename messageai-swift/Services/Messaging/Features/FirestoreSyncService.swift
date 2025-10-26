@@ -535,8 +535,7 @@ final class FirestoreSyncService {
                 let currentUserId = currentUserId
             else { continue }
 
-            // Support both old (deliveryStatus) and new (deliveryState) field names
-            let statusRaw = (data["deliveryState"] as? String) ?? (data["deliveryStatus"] as? String)
+            let statusRaw = data["deliveryState"] as? String
 
             if senderId != currentUserId, statusRaw == MessageDeliveryState.sent.rawValue {
                 let messageId = change.document.documentID

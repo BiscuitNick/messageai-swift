@@ -58,17 +58,3 @@ struct DeliveryStateIcon: View {
         }
     }
 }
-
-// Legacy support
-struct DeliveryStatusIcon: View {
-    let status: DeliveryStatus
-    var color: Color
-
-    var body: some View {
-        DeliveryStateIcon(
-            state: status.toDeliveryState,
-            onRetry: nil,
-            color: color
-        )
-    }
-}

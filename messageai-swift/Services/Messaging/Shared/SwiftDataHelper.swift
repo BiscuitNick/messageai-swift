@@ -33,13 +33,6 @@ struct SwiftDataHelper {
     static func parseUnreadCount(_ value: Any?, participants: [String]) -> [String: Int] {
         if let dict = value as? [String: Int] {
             return dict
-        } else if let count = value as? Int {
-            // Legacy: single unread count
-            var unreadDict: [String: Int] = [:]
-            for participantId in participants {
-                unreadDict[participantId] = count
-            }
-            return unreadDict
         }
         return [:]
     }

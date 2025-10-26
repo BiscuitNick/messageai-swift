@@ -148,7 +148,6 @@ final class DeliveryStateTracker {
         from data: [String: Any],
         fallback: MessageDeliveryState = .sent
     ) -> MessageDeliveryState {
-        // Use deliveryState field (new app, no legacy needed)
         if let stateRaw = data["deliveryState"] as? String,
            let state = MessageDeliveryState(rawValue: stateRaw) {
             return state

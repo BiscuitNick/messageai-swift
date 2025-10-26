@@ -299,44 +299,4 @@ final class FirestoreCoordinator {
     func deleteBots() async throws {
         try await botAgentService.deleteBots()
     }
-
-    // MARK: - Legacy Methods (for backward compatibility, will be removed)
-
-    /// Mark conversation as read (legacy - should use MessagingCoordinator)
-    @available(*, deprecated, message: "Use MessagingCoordinator.markConversationAsRead instead")
-    func markConversationRead(conversationId: String, userId: String) async throws {
-        let conversationRef = db.collection("conversations").document(conversationId)
-        try await conversationRef.setData([
-            "unreadCount.\(userId)": 0,
-            "updatedAt": FieldValue.serverTimestamp()
-        ], merge: true)
-    }
-
-    /// Update message delivery (legacy - should use MessagingCoordinator)
-    @available(*, deprecated, message: "Use MessagingCoordinator for message operations")
-    func updateMessageDelivery(
-        conversationId: String,
-        messageId: String,
-        status: MessageDeliveryState,
-        userId: String
-    ) async throws {
-        let messageRef = db.collection("conversations")
-            .document(conversationId)
-            .collection("messages")
-            .document(messageId)
-
-        var update: [String: Any] = [
-            "deliveryState": status.rawValue,
-            // Legacy field for backward compatibility
-            "deliveryStatus": status.rawValue == "pending" ? "sending" : status.rawValue,
-            "updatedAt": FieldValue.serverTimestamp()
-        ]
-
-        if status == .read {
-            update["readReceipts.\(userId)"] = FieldValue.serverTimestamp()
-            update["readBy"] = FieldValue.arrayUnion([userId])
-        }
-
-        try await messageRef.setData(update, merge: true)
-    }
 }

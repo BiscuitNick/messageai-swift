@@ -41,43 +41,6 @@ final class MessageDeliveryStateTests: XCTestCase {
         XCTAssertEqual(MessageDeliveryState.failed.rawValue, "failed")
     }
 
-    // MARK: - Migration Tests
-
-    func testMigrationFromLegacySending() throws {
-        let state = MessageDeliveryState(fromLegacy: "sending")
-        XCTAssertEqual(state, .pending)
-    }
-
-    func testMigrationFromLegacySent() throws {
-        let state = MessageDeliveryState(fromLegacy: "sent")
-        XCTAssertEqual(state, .sent)
-    }
-
-    func testMigrationFromLegacyDelivered() throws {
-        let state = MessageDeliveryState(fromLegacy: "delivered")
-        XCTAssertEqual(state, .delivered)
-    }
-
-    func testMigrationFromLegacyRead() throws {
-        let state = MessageDeliveryState(fromLegacy: "read")
-        XCTAssertEqual(state, .read)
-    }
-
-    func testMigrationFromInvalidValue() throws {
-        let state = MessageDeliveryState(fromLegacy: "invalid")
-        XCTAssertEqual(state, .sent) // default fallback
-    }
-
-    func testMigrationFromPending() throws {
-        let state = MessageDeliveryState(fromLegacy: "pending")
-        XCTAssertEqual(state, .pending)
-    }
-
-    func testMigrationFromFailed() throws {
-        let state = MessageDeliveryState(fromLegacy: "failed")
-        XCTAssertEqual(state, .failed)
-    }
-
     // MARK: - Codable Tests
 
     func testEncodable() throws {

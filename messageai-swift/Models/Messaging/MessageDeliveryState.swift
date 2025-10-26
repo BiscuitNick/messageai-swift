@@ -14,40 +14,4 @@ enum MessageDeliveryState: String, Codable, CaseIterable, Sendable {
     case delivered
     case read
     case failed
-
-    /// Migrate from legacy DeliveryStatus values
-    init(fromLegacy status: String) {
-        switch status {
-        case "sending", "pending":
-            self = .pending
-        case "sent":
-            self = .sent
-        case "delivered":
-            self = .delivered
-        case "read":
-            self = .read
-        case "failed":
-            self = .failed
-        default:
-            self = .sent // default fallback
-        }
-    }
-}
-
-/// Legacy enum for backward compatibility during migration
-@available(*, deprecated, message: "Use MessageDeliveryState instead")
-enum DeliveryStatus: String, Codable, CaseIterable, Sendable {
-    case sending
-    case sent
-    case delivered
-    case read
-
-    var toDeliveryState: MessageDeliveryState {
-        switch self {
-        case .sending: return .pending
-        case .sent: return .sent
-        case .delivered: return .delivered
-        case .read: return .read
-        }
-    }
 }

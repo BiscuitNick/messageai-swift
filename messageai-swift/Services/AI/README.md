@@ -9,7 +9,6 @@ This directory contains the refactored AI features architecture, which replaces 
 ```
 AI/
 ├── README.md                           # This file
-├── MIGRATION_GUIDE.md                  # Detailed migration instructions
 ├── AIFeaturesCoordinator.swift         # Main coordinator (entry point)
 │
 ├── Shared/                             # Reusable infrastructure
@@ -402,10 +401,6 @@ func testCoordinator() {
 }
 ```
 
-## Migration
-
-See [MIGRATION_GUIDE.md](./MIGRATION_GUIDE.md) for detailed migration instructions from the old `AIFeaturesService`.
-
 ## Benefits
 
 1. **Maintainability**: Focused services are easier to understand and modify
@@ -424,7 +419,7 @@ When adding new AI features:
 2. Use shared infrastructure (`CacheManager`, `FeatureState`, etc.)
 3. Follow the pattern established by `SummaryService`
 4. Add the service to `AIFeaturesCoordinator`
-5. Update this README and migration guide
+5. Update this README
 6. Add unit tests
 
 ## License

@@ -70,10 +70,8 @@ final class MessageEntity {
         self.schedulingKeywordsData = LocalJSONCoder.encode(schedulingKeywords)
     }
 
-    // New API using MessageDeliveryState
     var deliveryState: MessageDeliveryState {
         get {
-            // Direct conversion - no legacy migration needed for new app
             MessageDeliveryState(rawValue: deliveryStatusRawValue) ?? .pending
         }
         set {
@@ -86,13 +84,6 @@ final class MessageEntity {
             #endif
             deliveryStatusRawValue = newValue.rawValue
         }
-    }
-
-    // Legacy API for backward compatibility
-    @available(*, deprecated, message: "Use deliveryState instead")
-    var deliveryStatus: DeliveryStatus {
-        get { DeliveryStatus(rawValue: deliveryStatusRawValue) ?? .sending }
-        set { deliveryStatusRawValue = newValue.rawValue }
     }
 
     var readReceipts: [String: Date] {

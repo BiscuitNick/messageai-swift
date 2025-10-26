@@ -91,7 +91,7 @@ final class SchedulingService {
             }
         }
 
-        // Don't prefetch if we've already done it for this conversation (legacy check)
+        // Don't prefetch if we've already done it for this conversation
         guard !prefetchedConversations.contains(conversationId) else {
             return
         }
