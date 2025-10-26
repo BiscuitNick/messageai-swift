@@ -262,15 +262,6 @@ private struct ConversationRow: View {
                 Text(timestampText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-
-                if unreadCount > 0 {
-                    Text("\(unreadCount)")
-                        .font(.caption.bold())
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.accentColor.opacity(0.2))
-                        .clipShape(Capsule())
-                }
             }
         }
         .padding(.vertical, 6)
