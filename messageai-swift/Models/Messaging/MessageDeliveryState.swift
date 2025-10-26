@@ -18,7 +18,7 @@ enum MessageDeliveryState: String, Codable, CaseIterable, Sendable {
     /// Migrate from legacy DeliveryStatus values
     init(fromLegacy status: String) {
         switch status {
-        case "sending":
+        case "sending", "pending":
             self = .pending
         case "sent":
             self = .sent
@@ -26,6 +26,8 @@ enum MessageDeliveryState: String, Codable, CaseIterable, Sendable {
             self = .delivered
         case "read":
             self = .read
+        case "failed":
+            self = .failed
         default:
             self = .sent // default fallback
         }

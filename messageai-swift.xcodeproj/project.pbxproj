@@ -12,6 +12,7 @@
 		DF45A1382EA85F37009582E2 /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = DF45A1372EA85F37009582E2 /* FirebaseMessaging */; };
 		DF8B68582EA91CC50084B324 /* FirebaseFunctions in Frameworks */ = {isa = PBXBuildFile; productRef = DF8B68572EA91CC50084B324 /* FirebaseFunctions */; };
 		DF8B685A2EA91CC50084B324 /* FirebaseStorage in Frameworks */ = {isa = PBXBuildFile; productRef = DF8B68592EA91CC50084B324 /* FirebaseStorage */; };
+		DF9A23962EADD0B5000DCC68 /* dash-1024x1024.jpg in Resources */ = {isa = PBXBuildFile; fileRef = DF9A23952EADD0B5000DCC68 /* dash-1024x1024.jpg */; };
 		DF9A6C392EAA5D5F008AFB67 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = DF9A6C382EAA5D5F008AFB67 /* GoogleSignIn */; };
 /* End PBXBuildFile section */
 
@@ -36,6 +37,7 @@
 		DF45A0FD2EA8593B009582E2 /* messageai-swift.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "messageai-swift.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		DF45A10E2EA8593C009582E2 /* messageai-swiftTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "messageai-swiftTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		DF45A1182EA8593C009582E2 /* messageai-swiftUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "messageai-swiftUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		DF9A23952EADD0B5000DCC68 /* dash-1024x1024.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = "dash-1024x1024.jpg"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -107,6 +109,7 @@
 				DF45A1112EA8593C009582E2 /* messageai-swiftTests */,
 				DF45A11B2EA8593C009582E2 /* messageai-swiftUITests */,
 				DF45A0FE2EA8593B009582E2 /* Products */,
+				DF9A23952EADD0B5000DCC68 /* dash-1024x1024.jpg */,
 			);
 			sourceTree = "<group>";
 		};
@@ -250,6 +253,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DF9A23962EADD0B5000DCC68 /* dash-1024x1024.jpg in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -84,26 +84,33 @@ final class MessageSendingService {
         modelContext.insert(optimisticMessage)
         try? modelContext.save()
 
+        #if DEBUG
+        print("[MessageSendingService] Created local message with .pending state: \(messageId)")
+        #endif
+
         // Notify AI Features of new message
         onMessageMutation?(conversationId, messageId)
 
         let conversationRef = db.collection("conversations").document(conversationId)
         let messageRef = conversationRef.collection("messages").document(messageId)
 
+        // Include deliveryState in the payload so it persists across app restarts
         let payload: [String: Any] = [
             "conversationId": conversationId,
             "senderId": currentUserId,
             "text": trimmed,
             "timestamp": Timestamp(date: timestamp),
-            "deliveryState": MessageDeliveryState.sent.rawValue,
-            // Legacy field for backward compatibility
-            "deliveryStatus": "sent",
+            "deliveryState": MessageDeliveryState.pending.rawValue, // Write pending state
             "updatedAt": FieldValue.serverTimestamp()
         ]
 
         let task = Task { [weak self] in
             do {
-                // Wrap Firestore setData with network simulation
+                #if DEBUG
+                print("[MessageSendingService] Starting Firestore write for message: \(messageId)")
+                #endif
+
+                // Write to Firestore (completes when written to cache)
                 if let simulator = self?.networkSimulator {
                     try await simulator.execute {
                         try await messageRef.setData(payload)
@@ -111,6 +118,12 @@ final class MessageSendingService {
                 } else {
                     try await messageRef.setData(payload)
                 }
+
+                #if DEBUG
+                print("[MessageSendingService] Firestore write queued successfully")
+                #endif
+
+                // FirestoreSyncService will handle state transitions based on cache/server status
 
                 // Get current conversation to update lastInteractionByUser
                 let conversationDoc: DocumentSnapshot
@@ -162,8 +175,13 @@ final class MessageSendingService {
                     lastMessage: trimmed
                 )
 
-                try await self?.markMessageAsSent(messageId: messageId)
+                #if DEBUG
+                print("[MessageSendingService] Message write completed successfully")
+                #endif
             } catch {
+                #if DEBUG
+                print("[MessageSendingService] Message write failed: \(error.localizedDescription)")
+                #endif
                 await self?.markMessageAsFailed(messageId: messageId)
             }
         }
@@ -199,22 +217,29 @@ final class MessageSendingService {
         let conversationRef = db.collection("conversations").document(message.conversationId)
         let messageRef = conversationRef.collection("messages").document(messageId)
 
+        // Include deliveryState as pending for retry
         let payload: [String: Any] = [
             "conversationId": message.conversationId,
             "senderId": message.senderId,
             "text": message.text,
             "timestamp": Timestamp(date: message.timestamp),
-            "deliveryState": MessageDeliveryState.sent.rawValue,
-            // Legacy field for backward compatibility
-            "deliveryStatus": "sent",
+            "deliveryState": MessageDeliveryState.pending.rawValue,
             "updatedAt": FieldValue.serverTimestamp()
         ]
 
         let task = Task { [weak self] in
             do {
                 try await messageRef.setData(payload)
-                try await self?.markMessageAsSent(messageId: messageId)
+
+                #if DEBUG
+                print("[MessageSendingService] Retry write queued successfully for \(messageId)")
+                #endif
+
+                // FirestoreSyncService will handle state transitions
             } catch {
+                #if DEBUG
+                print("[MessageSendingService] Retry failed for \(messageId): \(error.localizedDescription)")
+                #endif
                 await self?.markMessageAsFailed(messageId: messageId)
             }
         }
@@ -223,16 +248,6 @@ final class MessageSendingService {
     }
 
     // MARK: - Private Helpers
-
-    /// Mark message as sent using DeliveryStateTracker
-    private func markMessageAsSent(messageId: String) async throws {
-        try await deliveryStateTracker?.markAsSent(messageId: messageId)
-        pendingMessageTasks.removeValue(forKey: messageId)
-
-        #if DEBUG
-        print("[MessageSendingService] Message sent: \(messageId)")
-        #endif
-    }
 
     /// Mark message as failed using DeliveryStateTracker
     private func markMessageAsFailed(messageId: String) async {

@@ -55,6 +55,9 @@ final class MessageEntity {
         self.text = text
         self.timestamp = timestamp
         self.deliveryStatusRawValue = deliveryState.rawValue
+        #if DEBUG
+        print("[MessageEntity] INIT: \(id.prefix(8))... with deliveryState: \(deliveryState.rawValue)")
+        #endif
         self.readByData = LocalJSONCoder.encode(readReceipts)
         self.updatedAt = updatedAt
         self.priorityScore = priorityScore
@@ -70,10 +73,17 @@ final class MessageEntity {
     // New API using MessageDeliveryState
     var deliveryState: MessageDeliveryState {
         get {
-            // Support legacy "sending" -> "pending" migration
-            MessageDeliveryState(fromLegacy: deliveryStatusRawValue)
+            // Direct conversion - no legacy migration needed for new app
+            MessageDeliveryState(rawValue: deliveryStatusRawValue) ?? .pending
         }
         set {
+            let oldValue = deliveryState
+            #if DEBUG
+            if oldValue != newValue {
+                print("[MessageEntity] ⚠️ STATE CHANGE: \(id.prefix(8))... \(oldValue.rawValue) → \(newValue.rawValue)")
+                print("[MessageEntity] Call stack: \(Thread.callStackSymbols.prefix(5).joined(separator: "\n"))")
+            }
+            #endif
             deliveryStatusRawValue = newValue.rawValue
         }
     }

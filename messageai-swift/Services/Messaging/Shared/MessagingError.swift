@@ -13,6 +13,7 @@ enum MessagingError: Error, LocalizedError {
     case invalidParticipants
     case dataUnavailable
     case invalidData(String)
+    case timeout
 
     var errorDescription: String? {
         switch self {
@@ -24,6 +25,8 @@ enum MessagingError: Error, LocalizedError {
             return "Local data store not ready. Try again shortly."
         case .invalidData(let message):
             return "Invalid data: \(message)"
+        case .timeout:
+            return "Message send timed out. Check your connection."
         }
     }
 }

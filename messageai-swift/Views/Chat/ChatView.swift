@@ -62,9 +62,6 @@ struct ChatView: View {
     }
 
     private var groupedMessages: [(date: Date, items: [MessageEntity])] {
-        #if DEBUG
-        print("[ChatView] Total messages found: \(messages.count) for conversation: \(conversationId)")
-        #endif
         let calendar = Calendar.current
         let groups = Dictionary(grouping: messages) { message in
             calendar.startOfDay(for: message.timestamp)

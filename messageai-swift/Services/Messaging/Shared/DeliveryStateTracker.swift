@@ -45,12 +45,16 @@ final class DeliveryStateTracker {
             return
         }
 
+        #if DEBUG
+        print("[DeliveryStateTracker] Transitioning message \(messageId) from \(message.deliveryState.rawValue) → sent")
+        #endif
+
         message.deliveryState = .sent
         message.updatedAt = Date()
         try modelContext.save()
 
         #if DEBUG
-        print("[DeliveryStateTracker] Marked message as sent: \(messageId)")
+        print("[DeliveryStateTracker] ✅ Marked message as sent: \(messageId)")
         #endif
     }
 
@@ -135,7 +139,7 @@ final class DeliveryStateTracker {
         #endif
     }
 
-    /// Parse delivery state from Firestore data with backward compatibility
+    /// Parse delivery state from Firestore data
     /// - Parameters:
     ///   - data: Firestore document data
     ///   - fallback: Fallback state if none found
@@ -144,13 +148,10 @@ final class DeliveryStateTracker {
         from data: [String: Any],
         fallback: MessageDeliveryState = .sent
     ) -> MessageDeliveryState {
-        // Try new field first
-        if let stateRaw = data["deliveryState"] as? String {
-            return MessageDeliveryState(fromLegacy: stateRaw)
-        }
-        // Fall back to legacy field
-        if let statusRaw = data["deliveryStatus"] as? String {
-            return MessageDeliveryState(fromLegacy: statusRaw)
+        // Use deliveryState field (new app, no legacy needed)
+        if let stateRaw = data["deliveryState"] as? String,
+           let state = MessageDeliveryState(rawValue: stateRaw) {
+            return state
         }
         return fallback
     }

@@ -236,8 +236,11 @@ final class FirestoreSyncService {
             return
         }
 
+        let isFromCache = snapshot.metadata.isFromCache
+        let hasPendingWrites = snapshot.metadata.hasPendingWrites
+
         #if DEBUG
-        print("[FirestoreSyncService] Received message snapshot for \(conversationId) with \(snapshot.documents.count) documents, \(snapshot.documentChanges.count) changes")
+        print("[FirestoreSyncService] Received message snapshot for \(conversationId) with \(snapshot.documents.count) documents, \(snapshot.documentChanges.count) changes, isFromCache: \(isFromCache), hasPendingWrites: \(hasPendingWrites)")
         #endif
 
         // First pass: Update all messages
@@ -253,9 +256,6 @@ final class FirestoreSyncService {
                 continue
             }
 
-            // Support both old (deliveryStatus) and new (deliveryState) field names
-            let statusRaw = (data["deliveryState"] as? String) ?? (data["deliveryStatus"] as? String) ?? "sent"
-
             let messageId = change.document.documentID
             let timestamp = (data["timestamp"] as? Timestamp)?.dateValue() ?? Date()
             let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
@@ -264,13 +264,46 @@ final class FirestoreSyncService {
                 fallbackTimestamp: timestamp,
                 defaultReader: senderId
             )
-            let status = MessageDeliveryState(fromLegacy: statusRaw)
+
+            // Check if this specific document has pending writes or is from cache
+            let docIsFromCache = change.document.metadata.isFromCache
+            let docHasPendingWrites = change.document.metadata.hasPendingWrites
+
+            // Support deliveryState field (no legacy needed for new app)
+            let hasDeliveryStateField = data["deliveryState"] != nil
+            let statusRaw: String
+
+            if let state = data["deliveryState"] as? String {
+                // Trust the deliveryState from Firestore if it exists
+                statusRaw = state
+            } else if senderId == currentUserId {
+                // Sender's own message WITHOUT deliveryState field
+                // This means it's a new message that hasn't been written with state yet
+                if docIsFromCache || docHasPendingWrites {
+                    // Message from local cache (offline write) - keep pending
+                    statusRaw = MessageDeliveryState.pending.rawValue
+                } else {
+                    // Message from server - mark as sent
+                    statusRaw = MessageDeliveryState.sent.rawValue
+                }
+            } else {
+                // Recipient receiving a message - default to sent
+                statusRaw = MessageDeliveryState.sent.rawValue
+            }
+
+            let status = MessageDeliveryState(rawValue: statusRaw) ?? .sent
 
             // Determine final delivery state based on readReceipts
             let finalStatus: MessageDeliveryState = {
                 // Keep failed and pending states as-is
                 if status == .failed || status == .pending {
                     return status
+                }
+
+                // Only override to pending for cache IF there's no deliveryState field
+                // If deliveryState field exists, trust it!
+                if senderId == currentUserId && !hasDeliveryStateField && (docIsFromCache || docHasPendingWrites) {
+                    return .pending
                 }
 
                 // Check if any non-sender users have read the message
@@ -320,11 +353,84 @@ final class FirestoreSyncService {
             case .added, .modified:
                 if let existing = try? modelContext.fetch(descriptor).first {
                     #if DEBUG
-                    print("[FirestoreSyncService] Updating existing message: \(messageId)")
+                    print("[FirestoreSyncService] Updating existing message: \(messageId), currentState: \(existing.deliveryState.rawValue), finalStatus: \(finalStatus.rawValue), docIsFromCache: \(docIsFromCache), docHasPendingWrites: \(docHasPendingWrites)")
                     #endif
                     existing.text = text
                     existing.timestamp = timestamp
-                    existing.deliveryState = finalStatus
+
+                    // Update delivery state based on sync source
+                    if senderId == currentUserId {
+                        // Sender's own message
+                        if existing.deliveryState == .pending {
+                            // Message is currently pending locally
+                            if !docIsFromCache && !docHasPendingWrites && hasDeliveryStateField {
+                                // Message is from server, no pending writes, and has deliveryState field
+                                // But it's still marked as pending - update it to sent!
+                                if status == .pending {
+                                    // Update Firestore to mark as sent (only once)
+                                    #if DEBUG
+                                    print("[FirestoreSyncService] ✅ Server confirmed, updating Firestore .pending → .sent")
+                                    #endif
+                                    existing.deliveryState = .sent
+
+                                    // Update Firestore document (fire and forget)
+                                    Task { [weak self] in
+                                        let messageRef = self?.db.collection("conversations")
+                                            .document(conversationId)
+                                            .collection("messages")
+                                            .document(messageId)
+                                        try? await messageRef?.updateData([
+                                            "deliveryState": MessageDeliveryState.sent.rawValue
+                                        ])
+                                    }
+                                } else if finalStatus != .pending {
+                                    // Already marked as sent in Firestore
+                                    #if DEBUG
+                                    print("[FirestoreSyncService] Updating local state to match server: \(finalStatus.rawValue)")
+                                    #endif
+                                    existing.deliveryState = finalStatus
+                                }
+                            } else {
+                                // Still pending
+                                #if DEBUG
+                                print("[FirestoreSyncService] Keeping .pending state (cache: \(docIsFromCache), pending: \(docHasPendingWrites))")
+                                #endif
+                            }
+                        } else if existing.deliveryState == .failed {
+                            // Keep failed state unless explicitly changed
+                            if finalStatus != .failed && finalStatus != .pending {
+                                // Message was retried and succeeded
+                                #if DEBUG
+                                print("[FirestoreSyncService] Failed message now sent: \(finalStatus.rawValue)")
+                                #endif
+                                existing.deliveryState = finalStatus
+                            }
+                        } else {
+                            // Already sent/delivered/read
+                            // Only update if moving forward (sent -> delivered -> read)
+                            // Never go backward (e.g., sent -> pending)
+                            if finalStatus == .delivered && existing.deliveryState == .sent {
+                                existing.deliveryState = .delivered
+                                #if DEBUG
+                                print("[FirestoreSyncService] Message delivered")
+                                #endif
+                            } else if finalStatus == .read && (existing.deliveryState == .sent || existing.deliveryState == .delivered) {
+                                existing.deliveryState = .read
+                                #if DEBUG
+                                print("[FirestoreSyncService] Message read")
+                                #endif
+                            }
+                        }
+                    } else {
+                        // Other user's message - update normally
+                        if existing.deliveryState != finalStatus {
+                            #if DEBUG
+                            print("[FirestoreSyncService] Updated deliveryState to: \(finalStatus.rawValue)")
+                            #endif
+                            existing.deliveryState = finalStatus
+                        }
+                    }
+
                     existing.readReceipts = readReceipts
                     existing.updatedAt = updatedAt
                     existing.priorityScore = priorityScore
@@ -336,16 +442,27 @@ final class FirestoreSyncService {
                     existing.intentAnalyzedAt = intentAnalyzedAt
                     existing.schedulingKeywords = schedulingKeywords
                 } else {
-                    #if DEBUG
-                    print("[FirestoreSyncService] Inserting new message: \(messageId) in conversation: \(conversationId)")
-                    #endif
+                    // For sender's own messages from cache, always create as pending
+                    let initialDeliveryState: MessageDeliveryState
+                    if senderId == currentUserId && (docIsFromCache || docHasPendingWrites) {
+                        initialDeliveryState = .pending
+                        #if DEBUG
+                        print("[FirestoreSyncService] Inserting new message (sender, cache: \(docIsFromCache), pending: \(docHasPendingWrites)): \(messageId), deliveryState: .pending")
+                        #endif
+                    } else {
+                        initialDeliveryState = finalStatus
+                        #if DEBUG
+                        print("[FirestoreSyncService] Inserting new message: \(messageId) in conversation: \(conversationId), deliveryState: \(finalStatus.rawValue), isSender: \(senderId == currentUserId)")
+                        #endif
+                    }
+
                     let message = MessageEntity(
                         id: messageId,
                         conversationId: conversationId,
                         senderId: senderId,
                         text: text,
                         timestamp: timestamp,
-                        deliveryState: finalStatus,
+                        deliveryState: initialDeliveryState,
                         readReceipts: readReceipts,
                         updatedAt: updatedAt,
                         priorityScore: priorityScore,
