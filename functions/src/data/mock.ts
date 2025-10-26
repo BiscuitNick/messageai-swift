@@ -315,3 +315,13 @@ export const deleteUsers = onCall(async (request) => {
   await admin.firestore().recursiveDelete(firestore.collection(COLLECTION_USERS));
   return { status: "success" };
 });
+
+export const deleteCoordinationData = onCall(async (request) => {
+  requireAuth(request);
+  // Delete both coordination collections
+  await Promise.all([
+    admin.firestore().recursiveDelete(firestore.collection("coordinationInsights")),
+    admin.firestore().recursiveDelete(firestore.collection("coordinationAnalysisSummaries")),
+  ]);
+  return { status: "success" };
+});
