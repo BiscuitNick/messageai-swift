@@ -49,57 +49,72 @@ service cloud.firestore {
       allow delete: if false;
 
       match /messages/{messageId} {
+        // Allow participants to read messages
         allow read: if isAuthenticated()
-          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
+          && get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantIds.hasAny([request.auth.uid]);
 
+        // Allow participants to create messages
         allow create: if isAuthenticated()
-          && (request.resource.data.senderId == request.auth.uid
-              || request.resource.data.senderId.matches('bot:.*'))
-          && request.resource.data.conversationId == conversationId
-          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
+          && get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantIds.hasAny([request.auth.uid])
+          && request.resource.data.senderId == request.auth.uid
+          && request.resource.data.conversationId == conversationId;
 
+        // Allow sender to update their own message (for delivery state updates)
+        // Also allow any participant to update delivery state (for read receipts)
         allow update: if isAuthenticated()
-          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data)
-          && (request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-                'deliveryStatus', 'readBy', 'readReceipts', 'updatedAt'
-             ])
-             || request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-                'deliveryStatus', 'updatedAt'
-             ])
-             || request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-                'readBy', 'updatedAt'
-             ]))
-          && request.resource.data.senderId == resource.data.senderId
-          && request.resource.data.conversationId == resource.data.conversationId;
+          && get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantIds.hasAny([request.auth.uid])
+          && (
+            request.resource.data.senderId == resource.data.senderId  // No changing sender
+            && request.resource.data.text == resource.data.text       // No changing text
+            && request.resource.data.conversationId == resource.data.conversationId  // No changing conversation
+          );
 
         allow delete: if false;
       }
 
       match /actionItems/{actionItemId} {
+        // Allow participants to read action items
         allow read: if isAuthenticated()
-          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
+          && get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantIds.hasAny([request.auth.uid]);
 
-        allow create, update: if isAuthenticated()
-          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data)
-          && request.resource.data.conversationId == conversationId;
+        // Allow participants to create/update action items
+        // Cloud Functions also write via Admin SDK (bypasses these rules)
+        allow write: if isAuthenticated()
+          && get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantIds.hasAny([request.auth.uid]);
 
+        // Allow participants to delete action items
         allow delete: if isAuthenticated()
-          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
+          && get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantIds.hasAny([request.auth.uid]);
       }
 
       match /decisions/{decisionId} {
+        // Allow participants to read decisions
         allow read: if isAuthenticated()
-          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
+          && get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantIds.hasAny([request.auth.uid]);
 
-        allow create: if isAuthenticated()
-          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data)
-          && request.resource.data.conversationId == conversationId;
+        // Allow participants to create/update decisions
+        // Cloud Functions also write via Admin SDK (bypasses these rules)
+        allow write: if isAuthenticated()
+          && get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantIds.hasAny([request.auth.uid]);
 
-        allow update: if isAuthenticated()
-          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
-
+        // Allow participants to delete decisions
         allow delete: if isAuthenticated()
-          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
+          && get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantIds.hasAny([request.auth.uid]);
+      }
+
+      match /typing/{userId} {
+        // Allow participants to read typing indicators
+        allow read: if isAuthenticated()
+          && get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantIds.hasAny([request.auth.uid]);
+
+        // Allow users to write/update their own typing status only
+        allow write: if isAuthenticated()
+          && request.auth.uid == userId
+          && get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantIds.hasAny([request.auth.uid]);
+
+        // Allow users to delete their own typing status
+        allow delete: if isAuthenticated()
+          && request.auth.uid == userId;
       }
     }
 

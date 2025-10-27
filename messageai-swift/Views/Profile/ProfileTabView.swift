@@ -1,10 +1,10 @@
 import SwiftUI
 
 struct ProfileTabView: View {
-    let currentUser: AuthService.AppUser
+    let currentUser: AuthCoordinator.AppUser
 
-    @Environment(AuthService.self) private var authService
-    @Environment(MessagingService.self) private var messagingService
+    @Environment(AuthCoordinator.self) private var authService
+    @Environment(MessagingCoordinator.self) private var messagingCoordinator
 
     var body: some View {
         ProfileView(
@@ -16,6 +16,6 @@ struct ProfileTabView: View {
 
     private func handleSignOut() {
         authService.signOut()
-        messagingService.reset()
+        messagingCoordinator.reset()
     }
 }

@@ -11,7 +11,7 @@ import SwiftData
 struct DecisionsTabView: View {
     let conversationId: String
 
-    @Environment(AIFeaturesService.self) private var aiFeaturesService
+    @Environment(AIFeaturesCoordinator.self) private var aiCoordinator
     @Environment(\.modelContext) private var modelContext
 
     @Query private var decisions: [DecisionEntity]
@@ -195,7 +195,7 @@ struct DecisionsTabView: View {
         isTracking = true
         Task {
             do {
-                _ = try await aiFeaturesService.recordDecisions(
+                _ = try await aiCoordinator.decisionTrackingService.recordDecisions(
                     conversationId: conversationId,
                     windowDays: 30
                 )
@@ -213,9 +213,9 @@ private struct DecisionRow: View {
     let onEdit: () -> Void
 
     @Environment(\.modelContext) private var modelContext
-    @Environment(AIFeaturesService.self) private var aiFeaturesService
-    @Environment(NotificationService.self) private var notificationService
-    @Environment(FirestoreService.self) private var firestoreService
+    @Environment(AIFeaturesCoordinator.self) private var aiCoordinator
+    @Environment(NotificationCoordinator.self) private var notificationService
+    @Environment(FirestoreCoordinator.self) private var firestoreCoordinator
 
     @State private var showingReminderPicker = false
 
@@ -391,7 +391,7 @@ private struct DecisionRow: View {
                     reminderDate: date
                 )
 
-                try await firestoreService.updateDecisionReminder(
+                try await firestoreCoordinator.updateDecisionReminder(
                     conversationId: conversationId,
                     decisionId: decision.id,
                     reminderDate: date
@@ -419,7 +419,7 @@ private struct DecisionRow: View {
         // Sync to Firestore
         Task {
             do {
-                try await firestoreService.updateDecisionReminder(
+                try await firestoreCoordinator.updateDecisionReminder(
                     conversationId: conversationId,
                     decisionId: decision.id,
                     reminderDate: nil
@@ -460,7 +460,7 @@ private struct DecisionRow: View {
         // Sync back to Firestore
         Task {
             do {
-                try await aiFeaturesService.updateDecisionStatus(
+                try await aiCoordinator.decisionTrackingService.updateDecisionStatus(
                     conversationId: conversationId,
                     decisionId: decision.id,
                     followUpStatus: newStatus
@@ -489,7 +489,7 @@ private struct DecisionRow: View {
         // Delete from Firestore
         Task {
             do {
-                try await aiFeaturesService.deleteDecision(
+                try await aiCoordinator.decisionTrackingService.deleteDecision(
                     conversationId: conversationId,
                     decisionId: decision.id
                 )

@@ -23,7 +23,7 @@ struct AuthView: View {
         var id: String { rawValue }
     }
 
-    @Environment(AuthService.self) private var authService
+    @Environment(AuthCoordinator.self) private var authService
     @State private var mode: Mode = .signIn
     @State private var email: String = ""
     @State private var password: String = ""

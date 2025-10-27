@@ -56,7 +56,7 @@ final class AIFeaturesServiceTests: XCTestCase {
     // MARK: - Configuration Tests
 
     func testServiceConfiguration() throws {
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 
@@ -165,7 +165,7 @@ final class AIFeaturesServiceTests: XCTestCase {
 
     func testSaveMeetingSuggestions() throws {
         // Configure service with model context
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 
@@ -212,7 +212,7 @@ final class AIFeaturesServiceTests: XCTestCase {
 
     func testFetchMeetingSuggestionsReturnsNilWhenNotFound() throws {
         // Configure service
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 
@@ -231,7 +231,7 @@ final class AIFeaturesServiceTests: XCTestCase {
 
     func testDeleteMeetingSuggestions() throws {
         // Configure service
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 
@@ -278,7 +278,7 @@ final class AIFeaturesServiceTests: XCTestCase {
 
     func testClearExpiredMeetingSuggestions() throws {
         // Configure service
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 
@@ -336,7 +336,7 @@ final class AIFeaturesServiceTests: XCTestCase {
 
     func testMeetingSuggestionExpiryLogic() throws {
         // Configure service
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 
@@ -377,7 +377,7 @@ final class AIFeaturesServiceTests: XCTestCase {
 
     func testMeetingSuggestionValidationWithEmptySuggestions() throws {
         // Configure service
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 
@@ -458,7 +458,7 @@ final class AIFeaturesServiceTests: XCTestCase {
 
     func testMultipleMeetingSuggestionsForDifferentConversations() throws {
         // Configure service
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 
@@ -515,7 +515,7 @@ final class AIFeaturesServiceTests: XCTestCase {
 
     func testUpdateExistingMeetingSuggestions() throws {
         // Configure service
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 
@@ -590,7 +590,7 @@ final class AIFeaturesServiceTests: XCTestCase {
 
     func testOnMessageMutationWithoutSchedulingIntent() async throws {
         // Configure service with mock dependencies
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 
@@ -633,7 +633,7 @@ final class AIFeaturesServiceTests: XCTestCase {
 
     func testOnMessageMutationWithLowConfidenceIntent() async throws {
         // Configure service
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 
@@ -678,7 +678,7 @@ final class AIFeaturesServiceTests: XCTestCase {
 
     func testOnMessageMutationWithHighConfidenceIntent() async throws {
         // Configure service
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 
@@ -727,7 +727,7 @@ final class AIFeaturesServiceTests: XCTestCase {
 
     func testOnMessageMutationWithBotParticipant() async throws {
         // Configure service
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 
@@ -772,7 +772,7 @@ final class AIFeaturesServiceTests: XCTestCase {
 
     func testPrefetchOnlyOncePerConversation() async throws {
         // Configure service
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 
@@ -835,7 +835,7 @@ final class AIFeaturesServiceTests: XCTestCase {
 
     func testSchedulingIntentWithNoneClassification() async throws {
         // Configure service
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 
@@ -893,7 +893,7 @@ final class AIFeaturesServiceTests: XCTestCase {
 
     func testSnoozeSchedulingSuggestions() throws {
         // Configure service
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 
@@ -919,7 +919,7 @@ final class AIFeaturesServiceTests: XCTestCase {
 
     func testSnoozeWithCustomDuration() throws {
         // Configure service
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 
@@ -942,7 +942,7 @@ final class AIFeaturesServiceTests: XCTestCase {
 
     func testSnoozeUpdateExisting() throws {
         // Configure service
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 
@@ -974,7 +974,7 @@ final class AIFeaturesServiceTests: XCTestCase {
 
     func testClearSchedulingSuggestionsSnooze() throws {
         // Configure service
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 
@@ -999,7 +999,7 @@ final class AIFeaturesServiceTests: XCTestCase {
 
     func testExpiredSnoozeAutoCleanup() throws {
         // Configure service
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 
@@ -1034,7 +1034,7 @@ final class AIFeaturesServiceTests: XCTestCase {
 
     func testClearExpiredSnoozes() throws {
         // Configure service
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 
@@ -1074,7 +1074,7 @@ final class AIFeaturesServiceTests: XCTestCase {
 
     func testSnoozePreventsAutoPrefetch() async throws {
         // Configure service
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 
@@ -1124,7 +1124,7 @@ final class AIFeaturesServiceTests: XCTestCase {
 
     func testDebouncePreventsDuplicatePrefetch() async throws {
         // Configure service
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 
@@ -1188,7 +1188,7 @@ final class AIFeaturesServiceTests: XCTestCase {
 
     func testSnoozePersistsAcrossServiceInstances() throws {
         // Configure first service instance
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 
@@ -1228,7 +1228,7 @@ final class AIFeaturesServiceTests: XCTestCase {
         // Access private isConnected via reflection to set it for testing
         // Note: In production, this would be controlled by actual network state
 
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 
@@ -1271,7 +1271,7 @@ final class AIFeaturesServiceTests: XCTestCase {
 
     func testPendingQueueProcessedWhenNetworkReturns() async throws {
         let networkMonitor = NetworkMonitor()
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 
@@ -1316,7 +1316,7 @@ final class AIFeaturesServiceTests: XCTestCase {
 
     func testSnoozedConversationsNotQueuedWhenOffline() async throws {
         let networkMonitor = NetworkMonitor()
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 
@@ -1362,7 +1362,7 @@ final class AIFeaturesServiceTests: XCTestCase {
 
     func testDebounceRespectedDuringOfflineOnlineTransition() async throws {
         let networkMonitor = NetworkMonitor()
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 
@@ -1405,7 +1405,7 @@ final class AIFeaturesServiceTests: XCTestCase {
 
     func testClearCachesAlsoClearsPendingQueue() throws {
         let networkMonitor = NetworkMonitor()
-        let authService = AuthService()
+        let authService = AuthCoordinator()
         let messagingService = MessagingService()
         let firestoreService = FirestoreService()
 

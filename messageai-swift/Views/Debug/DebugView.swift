@@ -5,16 +5,21 @@ import SwiftUI
 import SwiftData
 
 struct DebugView: View {
-    let currentUser: AuthService.AppUser
+    let currentUser: AuthCoordinator.AppUser
 
-    @Environment(AuthService.self) private var authService
-    @Environment(NotificationService.self) private var notificationService
-    @Environment(MessagingService.self) private var messagingService
-    @Environment(FirestoreService.self) private var firestoreService
+    @Environment(AuthCoordinator.self) private var authService
+    @Environment(NotificationCoordinator.self) private var notificationService
+    @Environment(MessagingCoordinator.self) private var messagingCoordinator
+    @Environment(FirestoreCoordinator.self) private var firestoreCoordinator
     @Environment(NetworkSimulator.self) private var networkSimulator
+    @Environment(\.modelContext) private var modelContext
     private let functions = Functions.functions(region: "us-central1")
 
     @Query private var bots: [BotEntity]
+    @Query private var coordinationInsights: [CoordinationInsightEntity]
+    @Query private var proactiveAlerts: [ProactiveAlertEntity]
+    @Query private var conversations: [ConversationEntity]
+    @Query private var messages: [MessageEntity]
 
     @State private var serverTimeResult: String?
     @State private var serverTimeError: String?
@@ -33,6 +38,9 @@ struct DebugView: View {
     @State private var deleteBotsStatus: String?
     @State private var deleteBotsError: String?
     @State private var isDeletingBots = false
+    @State private var deleteCoordinationStatus: String?
+    @State private var deleteCoordinationError: String?
+    @State private var isDeletingCoordination = false
 
     var body: some View {
         NavigationStack {
@@ -175,9 +183,7 @@ struct DebugView: View {
         Section("Messaging Service") {
             LabeledContent("Configured", value: messagingDebug.isConfigured ? "Yes" : "No")
             LabeledContent("Active User ID", value: messagingDebug.currentUserId ?? "nil")
-            LabeledContent("Conversation Listener", value: messagingDebug.conversationListenerActive ? "Active" : "Inactive")
-            LabeledContent("Message Listeners", value: "\(messagingDebug.activeMessageListeners)")
-            LabeledContent("Pending Message Tasks", value: "\(messagingDebug.pendingMessageTasks)")
+            LabeledContent("Active Listeners", value: "\(messagingDebug.activeListeners)")
         }
     }
 
@@ -199,25 +205,12 @@ struct DebugView: View {
                 if isRecreatingBots {
                     ProgressView()
                 } else {
-                    Label("Recreate Bots", systemImage: "sparkles")
+                    Label("Seed Bots Data", systemImage: "sparkles")
                 }
             }
             .disabled(isRecreatingBots)
 
             statusText(success: recreateBotsStatus, error: recreateBotsError)
-
-            Button(role: .destructive) {
-                Task { await deleteBots() }
-            } label: {
-                if isDeletingBots {
-                    ProgressView()
-                } else {
-                    Label("Delete Bots", systemImage: "trash")
-                }
-            }
-            .disabled(isDeletingBots)
-
-            statusText(success: deleteBotsStatus, error: deleteBotsError)
 
             Button {
                 Task { await triggerMockSeed() }
@@ -231,6 +224,19 @@ struct DebugView: View {
             .disabled(isMockBusy)
 
             statusText(success: mockStatus, error: mockError)
+
+            Button(role: .destructive) {
+                Task { await deleteBots() }
+            } label: {
+                if isDeletingBots {
+                    ProgressView()
+                } else {
+                    Label("Delete Bots", systemImage: "trash")
+                }
+            }
+            .disabled(isDeletingBots)
+
+            statusText(success: deleteBotsStatus, error: deleteBotsError)
 
             Button(role: .destructive) {
                 Task { await deleteConversations() }
@@ -257,6 +263,19 @@ struct DebugView: View {
             .disabled(isDeletingUsers)
 
             statusText(success: deleteUsersStatus, error: deleteUsersError)
+
+            Button(role: .destructive) {
+                Task { await deleteCoordinationData() }
+            } label: {
+                if isDeletingCoordination {
+                    ProgressView()
+                } else {
+                    Label("Delete Coordination Data", systemImage: "sparkles.rectangle.stack")
+                }
+            }
+            .disabled(isDeletingCoordination)
+
+            statusText(success: deleteCoordinationStatus, error: deleteCoordinationError)
         }
     }
 
@@ -312,10 +331,43 @@ struct DebugView: View {
         deleteConversationsStatus = nil
         deleteConversationsError = nil
         isDeletingConversations = true
-        defer { isDeletingConversations = false }
+        defer {
+            isDeletingConversations = false
+            // Reconfigure messaging coordinator after deletion
+            if let currentUserId = authService.currentUser?.id {
+                messagingCoordinator.configure(
+                    modelContext: modelContext,
+                    currentUserId: currentUserId,
+                    notificationService: notificationService,
+                    networkSimulator: networkSimulator
+                )
+            }
+        }
         do {
+            // Stop all listeners to prevent re-syncing during deletion
+            messagingCoordinator.reset()
+
+            // Delete remote Firestore data
             try await functions.httpsCallable("deleteConversations").call([String: Any]())
-            deleteConversationsStatus = "Conversations cleared at \(Date().formatted(dateTimeFormatter))"
+
+            // Wait a moment for the deletion to propagate
+            try await Task.sleep(nanoseconds: 500_000_000) // 0.5 second delay
+
+            // Delete all local SwiftData entities
+            let allConversations = try modelContext.fetch(FetchDescriptor<ConversationEntity>())
+            for conversation in allConversations {
+                modelContext.delete(conversation)
+            }
+
+            let allMessages = try modelContext.fetch(FetchDescriptor<MessageEntity>())
+            for message in allMessages {
+                modelContext.delete(message)
+            }
+
+            // Save changes
+            try modelContext.save()
+
+            deleteConversationsStatus = "Conversations cleared (local & remote) at \(Date().formatted(dateTimeFormatter))"
         } catch {
             deleteConversationsError = describe(error)
         }
@@ -342,7 +394,7 @@ struct DebugView: View {
         isRecreatingBots = true
         defer { isRecreatingBots = false }
         do {
-            try await firestoreService.ensureBotExists()
+            try await firestoreCoordinator.ensureBotExists()
             recreateBotsStatus = "Bots recreated at \(Date().formatted(dateTimeFormatter))"
         } catch {
             recreateBotsError = describe(error)
@@ -356,10 +408,37 @@ struct DebugView: View {
         isDeletingBots = true
         defer { isDeletingBots = false }
         do {
-            try await firestoreService.deleteBots()
+            try await firestoreCoordinator.deleteBots()
             deleteBotsStatus = "Bots deleted at \(Date().formatted(dateTimeFormatter))"
         } catch {
             deleteBotsError = describe(error)
+        }
+    }
+
+    @MainActor
+    private func deleteCoordinationData() async {
+        deleteCoordinationStatus = nil
+        deleteCoordinationError = nil
+        isDeletingCoordination = true
+        defer { isDeletingCoordination = false }
+        do {
+            // Delete remote Firestore data
+            try await functions.httpsCallable("deleteCoordinationData").call([String: Any]())
+
+            // Delete local SwiftData entities
+            for insight in coordinationInsights {
+                modelContext.delete(insight)
+            }
+            for alert in proactiveAlerts {
+                modelContext.delete(alert)
+            }
+
+            // Save changes
+            try modelContext.save()
+
+            deleteCoordinationStatus = "Coordination data cleared (local & remote) at \(Date().formatted(dateTimeFormatter))"
+        } catch {
+            deleteCoordinationError = describe(error)
         }
     }
 
@@ -382,8 +461,8 @@ struct DebugView: View {
         FirebaseApp.app()?.options
     }
 
-    private var messagingDebug: MessagingService.DebugSnapshot {
-        messagingService.debugSnapshot
+    private var messagingDebug: MessagingCoordinator.DebugSnapshot {
+        messagingCoordinator.debugSnapshot
     }
 
     private func statusDescription(for status: UNAuthorizationStatus) -> String {

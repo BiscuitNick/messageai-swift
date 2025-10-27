@@ -16,25 +16,25 @@ const SAMPLE_CONTACTS: SampleContact[] = [
   {
     id: "mock-alex",
     displayName: "Alex Rivera",
-    email: "alex@example.com",
+    email: "alex.rivera@acme.co",
     avatarUrl: "https://i.pravatar.cc/150?img=1",
   },
   {
     id: "mock-priya",
     displayName: "Priya Patel",
-    email: "priya@example.com",
+    email: "priya.patel@acme.co",
     avatarUrl: "https://i.pravatar.cc/150?img=5",
   },
   {
     id: "mock-sam",
     displayName: "Sam Carter",
-    email: "sam@example.com",
+    email: "sam.carter@acme.co",
     avatarUrl: "https://i.pravatar.cc/150?img=12",
   },
   {
     id: "mock-jordan",
-    displayName: "Jordan Smith",
-    email: "jordan@example.com",
+    displayName: "Jordan Lee",
+    email: "jordan.lee@acme.co",
     avatarUrl: "https://i.pravatar.cc/150?img=8",
   },
 ];
@@ -171,7 +171,7 @@ async function seedConversation({
       senderId: message.senderId,
       text: message.text,
       timestamp: admin.firestore.Timestamp.fromDate(message.timestamp),
-      deliveryStatus: DELIVERY_SENT,
+      deliveryState: DELIVERY_SENT,
       readReceipts,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       // AI metadata fields (null by default, will be populated by triggers)
@@ -217,16 +217,61 @@ function shuffleArray<T>(array: T[]): T[] {
 }
 
 const MESSAGE_TEMPLATES = [
-  "Quick sync?",
-  "Let me know if you spot any issues.",
-  "Great progress today!",
-  "I'll tackle the next item on the list.",
-  "Can we circle back on this later?",
-  "Thanks for jumping in so quickly.",
-  "Pushing an update now.",
-  "I'll double-check the numbers.",
-  "Looping in the team.",
-  "Ship it! 🚀",
+  // Project planning & deadlines
+  "We need to finalize the Q1 roadmap by Friday. Can you review the draft?",
+  "The client demo is scheduled for March 15th. Are we on track?",
+  "I'm blocked on the API integration until the auth service is deployed.",
+  "Just pushed the feature branch. Ready for code review when you have time.",
+  "Sprint planning tomorrow at 10am PT. I'll share the agenda in advance.",
+
+  // Meeting scheduling
+  "Can we schedule a sync call this week? I'm free Tuesday 2-4pm or Thursday morning.",
+  "Moving our 1:1 to Wednesday at 3pm - does that work for you?",
+  "Quick 15min standup at 9am tomorrow to align on priorities?",
+  "I need to reschedule our design review. How's Friday afternoon?",
+  "Are you available for a quick call now? Found an issue we should discuss.",
+
+  // Action items & assignments
+  "I'll take ownership of the database migration. Target completion: end of week.",
+  "Can you handle the documentation updates? Deadline is next Monday.",
+  "Assigned you the bug fix for the login flow. Let me know if you need context.",
+  "I'll review the PR this afternoon and get you feedback by EOD.",
+  "Taking on the performance optimization task. Should be done by Wednesday.",
+
+  // Decisions & follow-ups
+  "We decided to go with PostgreSQL for the new service. I'll update the architecture doc.",
+  "Following up on last week's discussion about the testing strategy - any thoughts?",
+  "Have we made a decision on the deployment approach yet?",
+  "Per our call yesterday, I'm moving forward with the React Native approach.",
+  "Circling back on the API versioning strategy we discussed. Still planning v2 for May?",
+
+  // Status updates & progress
+  "Auth service is deployed to staging. Ready for QA testing.",
+  "Finished the user research interviews. Compiling insights now.",
+  "Payment integration is 80% complete. Just need to handle edge cases.",
+  "Hit a snag with the third-party API. Investigating workarounds.",
+  "Dashboard redesign is live in production. Monitoring analytics.",
+
+  // Blockers & dependencies
+  "Can't proceed with the frontend work until the API endpoints are ready.",
+  "Waiting on legal approval for the terms of service updates.",
+  "The staging environment is down. Is anyone else seeing this?",
+  "Need access to the analytics dashboard to complete my analysis.",
+  "External dependency on the vendor API - they're experiencing an outage.",
+
+  // Team coordination
+  "Great work on the launch! Team effort really paid off.",
+  "I'll be OOO next week. Alex will cover any urgent items.",
+  "Thanks for catching that bug before it hit production!",
+  "Let's prioritize the security fixes in this sprint.",
+  "Anyone have capacity to help with the data migration?",
+
+  // Availability & scheduling conflicts
+  "I'm in back-to-back meetings until 4pm. Can we sync after that?",
+  "Heads up: I'll be working East Coast hours this week.",
+  "Taking PTO on Friday. Wrapping up my tasks by Thursday EOD.",
+  "Double-booked for that time slot. Can we find another time?",
+  "Running 10 minutes late to our call. Starting without me is fine.",
 ];
 
 function randomMessageText(senderId: string): string {
@@ -268,5 +313,15 @@ export const deleteConversations = onCall(async (request) => {
 export const deleteUsers = onCall(async (request) => {
   requireAuth(request);
   await admin.firestore().recursiveDelete(firestore.collection(COLLECTION_USERS));
+  return { status: "success" };
+});
+
+export const deleteCoordinationData = onCall(async (request) => {
+  requireAuth(request);
+  // Delete both coordination collections
+  await Promise.all([
+    admin.firestore().recursiveDelete(firestore.collection("coordinationInsights")),
+    admin.firestore().recursiveDelete(firestore.collection("coordinationAnalysisSummaries")),
+  ]);
   return { status: "success" };
 });

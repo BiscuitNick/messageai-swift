@@ -59,8 +59,11 @@ export const extractActionItems = onCall<ExtractActionItemsRequest>(async (reque
   const { conversationId, windowDays = 7 } = request.data;
 
   try {
+    console.log(`[extractActionItems] Starting extraction for conversation ${conversationId}, windowDays: ${windowDays}`);
+
     // Verify user is a participant in the conversation
     const conversationRef = firestore.collection(COLLECTION_CONVERSATIONS).doc(conversationId);
+    console.log(`[extractActionItems] Fetching conversation document...`);
     const conversationDoc = await conversationRef.get();
 
     if (!conversationDoc.exists) {
@@ -77,17 +80,31 @@ export const extractActionItems = onCall<ExtractActionItemsRequest>(async (reque
       );
     }
 
+    console.log(`[extractActionItems] User ${uid} is authorized participant`);
+
     // Calculate the cutoff date for the time window
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - windowDays);
 
+    console.log(`[extractActionItems] Fetching messages since ${cutoffDate.toISOString()}...`);
+
     // Fetch messages from the last N days
-    const messagesSnapshot = await conversationRef
-      .collection("messages")
-      .where("timestamp", ">=", cutoffDate)
-      .orderBy("timestamp", "asc")
-      .limit(100) // Limit to prevent excessive token usage
-      .get();
+    let messagesSnapshot;
+    try {
+      messagesSnapshot = await conversationRef
+        .collection("messages")
+        .where("timestamp", ">=", admin.firestore.Timestamp.fromDate(cutoffDate))
+        .orderBy("timestamp", "asc")
+        .limit(100) // Limit to prevent excessive token usage
+        .get();
+    } catch (queryError) {
+      console.error(`[extractActionItems] Firestore query failed:`, queryError);
+      throw new HttpsError(
+        "internal",
+        `Failed to query messages: ${queryError instanceof Error ? queryError.message : String(queryError)}`,
+        queryError
+      );
+    }
 
     if (messagesSnapshot.empty) {
       console.log(`[extractActionItems] No messages found in ${windowDays}-day window for conversation ${conversationId}`);
@@ -139,15 +156,26 @@ export const extractActionItems = onCall<ExtractActionItemsRequest>(async (reque
     console.log(`[extractActionItems] Analyzing ${conversationText.split('\n').length} lines of conversation`);
 
     // Call OpenAI for action item extraction using Vercel AI SDK
-    const { object: extractedData } = await generateObject({
-      model: openai("gpt-4o-mini"),
-      system: systemPrompt,
-      prompt: userPrompt,
-      schema: actionItemsResponseSchema,
-      temperature: 0.2, // Lower temperature for more deterministic extraction
-    });
-
-    console.log(`[extractActionItems] OpenAI found ${extractedData.actionItems.length} action items`);
+    let extractedData;
+    try {
+      console.log(`[extractActionItems] Calling OpenAI API...`);
+      const result = await generateObject({
+        model: openai("gpt-4o-mini"),
+        system: systemPrompt,
+        prompt: userPrompt,
+        schema: actionItemsResponseSchema,
+        temperature: 0.2, // Lower temperature for more deterministic extraction
+      });
+      extractedData = result.object;
+      console.log(`[extractActionItems] OpenAI found ${extractedData.actionItems.length} action items`);
+    } catch (aiError) {
+      console.error(`[extractActionItems] OpenAI API call failed:`, aiError);
+      throw new HttpsError(
+        "internal",
+        `AI extraction failed: ${aiError instanceof Error ? aiError.message : String(aiError)}`,
+        aiError
+      );
+    }
 
     // Format response and persist to Firestore
     // Use deterministic IDs based on content hash to prevent duplicates
@@ -164,39 +192,49 @@ export const extractActionItems = onCall<ExtractActionItemsRequest>(async (reque
     }));
 
     // Persist action items to Firestore subcollection with proper Timestamps
+    console.log(`[extractActionItems] Preparing to persist ${actionItems.length} action items to Firestore...`);
     const batch = firestore.batch();
     const actionItemsRef = conversationRef.collection("actionItems");
 
-    for (const actionItem of actionItems) {
-      const itemRef = actionItemsRef.doc(actionItem.id);
-      const existingDoc = await itemRef.get();
+    try {
+      for (const actionItem of actionItems) {
+        const itemRef = actionItemsRef.doc(actionItem.id);
+        const existingDoc = await itemRef.get();
 
-      // Prepare Firestore data with Timestamps and camelCase field names for Swift
-      const firestoreData = {
-        task: actionItem.task,
-        assignedTo: actionItem.assigned_to,
-        dueDate: actionItem.due_date ? admin.firestore.Timestamp.fromDate(new Date(actionItem.due_date)) : null,
-        priority: actionItem.priority,
-        status: actionItem.status,
-        conversationId: actionItem.conversation_id,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      };
+        // Prepare Firestore data with Timestamps and camelCase field names for Swift
+        const firestoreData = {
+          task: actionItem.task,
+          assignedTo: actionItem.assigned_to,
+          dueDate: actionItem.due_date ? admin.firestore.Timestamp.fromDate(new Date(actionItem.due_date)) : null,
+          priority: actionItem.priority,
+          status: actionItem.status,
+          conversationId: actionItem.conversation_id,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
 
-      if (existingDoc.exists) {
-        // Update existing action item, preserving created_at
-        batch.set(itemRef, firestoreData, { merge: true });
-      } else {
-        // Create new action item with createdAt
-        batch.set(itemRef, {
-          ...firestoreData,
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
+        if (existingDoc.exists) {
+          // Update existing action item, preserving created_at
+          batch.set(itemRef, firestoreData, { merge: true });
+        } else {
+          // Create new action item with createdAt
+          batch.set(itemRef, {
+            ...firestoreData,
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        }
       }
+
+      console.log(`[extractActionItems] Committing batch write...`);
+      await batch.commit();
+      console.log(`[extractActionItems] Persisted ${actionItems.length} action items to Firestore`);
+    } catch (firestoreError) {
+      console.error(`[extractActionItems] Firestore batch write failed:`, firestoreError);
+      throw new HttpsError(
+        "internal",
+        `Failed to persist action items: ${firestoreError instanceof Error ? firestoreError.message : String(firestoreError)}`,
+        firestoreError
+      );
     }
-
-    await batch.commit();
-
-    console.log(`[extractActionItems] Persisted ${actionItems.length} action items to Firestore`);
 
     const response = {
       action_items: actionItems,

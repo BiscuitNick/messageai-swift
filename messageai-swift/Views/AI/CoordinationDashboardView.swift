@@ -9,7 +9,9 @@ import SwiftUI
 import SwiftData
 
 struct CoordinationDashboardView: View {
-    @Environment(AIFeaturesService.self) private var aiFeaturesService
+    let currentUser: AuthCoordinator.AppUser
+
+    @Environment(AIFeaturesCoordinator.self) private var aiCoordinator
     @Environment(\.modelContext) private var modelContext
 
     @Query(
@@ -36,6 +38,8 @@ struct CoordinationDashboardView: View {
     }
 
     @Query private var conversations: [ConversationEntity]
+    @Query private var users: [UserEntity]
+    @Query private var bots: [BotEntity]
 
     @State private var isRefreshing = false
     @State private var selectedInsight: CoordinationInsightEntity?
@@ -43,7 +47,9 @@ struct CoordinationDashboardView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if insights.isEmpty && alerts.isEmpty {
+                if isRefreshing && insights.isEmpty && alerts.isEmpty {
+                    loadingView
+                } else if insights.isEmpty && alerts.isEmpty {
                     emptyStateView
                 } else {
                     List {
@@ -95,7 +101,7 @@ struct CoordinationDashboardView: View {
                 }
             }
             .refreshable {
-                await aiFeaturesService.refreshCoordinationInsights()
+                await aiCoordinator.refreshCoordinationInsights()
             }
         }
     }
@@ -402,6 +408,20 @@ struct CoordinationDashboardView: View {
 
     // MARK: - Empty State
 
+    private var loadingView: some View {
+        VStack(spacing: 20) {
+            ProgressView()
+                .scaleEffect(1.5)
+
+            Text("Analyzing team coordination...")
+                .font(.body)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
+        .background(Color(.systemGroupedBackground))
+    }
+
     private var emptyStateView: some View {
         VStack(spacing: 20) {
             Image(systemName: "checkmark.seal.fill")
@@ -432,22 +452,7 @@ struct CoordinationDashboardView: View {
 
     @ViewBuilder
     private func destinationView(for insight: CoordinationInsightEntity, conversation: ConversationEntity) -> some View {
-        if let currentUser = try? modelContext.fetch(FetchDescriptor<UserEntity>()).first {
-            let photoURL: URL? = if let urlString = currentUser.profilePictureURL {
-                URL(string: urlString)
-            } else {
-                nil
-            }
-
-            ChatView(conversation: conversation, currentUser: AuthService.AppUser(
-                id: currentUser.id,
-                email: currentUser.email,
-                displayName: currentUser.displayName,
-                photoURL: photoURL
-            ))
-        } else {
-            Text("Unable to load chat")
-        }
+        ChatView(conversation: conversation, currentUser: currentUser)
     }
 
     // MARK: - Computed Properties
@@ -473,7 +478,29 @@ struct CoordinationDashboardView: View {
     }
 
     private func conversationTitle(for conversation: ConversationEntity) -> String {
-        conversation.groupName ?? "Chat"
+        if conversation.isGroup {
+            return conversation.groupName ?? "Group Chat"
+        }
+
+        let userLookup = Dictionary(uniqueKeysWithValues: users.map { ($0.id, $0) })
+        let botLookup = Dictionary(uniqueKeysWithValues: bots.map { ($0.id, $0) })
+
+        // For 1:1 conversations, find the other participant (not the current user)
+        let otherParticipant = conversation.participantIds.first { $0 != currentUser.id }
+
+        guard let otherParticipant else { return "Conversation" }
+
+        // Check if it's a bot (format: "bot:botId")
+        if otherParticipant.hasPrefix("bot:") {
+            let botId = String(otherParticipant.dropFirst(4))
+            if let bot = botLookup[botId] {
+                return bot.name
+            }
+        } else if let user = userLookup[otherParticipant] {
+            return user.displayName
+        }
+
+        return "Conversation"
     }
 
     // MARK: - Actions
@@ -482,7 +509,7 @@ struct CoordinationDashboardView: View {
         isRefreshing = true
         Task {
             // Force new analysis when user manually taps refresh
-            await aiFeaturesService.refreshCoordinationInsights(forceAnalysis: true)
+            await aiCoordinator.refreshCoordinationInsights(forceAnalysis: true)
             await MainActor.run {
                 isRefreshing = false
             }
@@ -491,7 +518,7 @@ struct CoordinationDashboardView: View {
 
     private func dismissAlert(_ alert: ProactiveAlertEntity) {
         do {
-            try aiFeaturesService.dismissAlert(alert.id)
+            try aiCoordinator.coordinationInsightsService.dismissAlert(alert.id)
         } catch {
             #if DEBUG
             print("[CoordinationDashboardView] Failed to dismiss alert: \(error.localizedDescription)")
@@ -501,7 +528,7 @@ struct CoordinationDashboardView: View {
 
     private func markAlertAsRead(_ alert: ProactiveAlertEntity) {
         do {
-            try aiFeaturesService.markAlertAsRead(alert.id)
+            try aiCoordinator.coordinationInsightsService.markAlertAsRead(alert.id)
         } catch {
             #if DEBUG
             print("[CoordinationDashboardView] Failed to mark alert as read: \(error.localizedDescription)")

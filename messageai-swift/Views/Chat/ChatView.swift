@@ -8,25 +8,19 @@
 import SwiftUI
 import SwiftData
 
-enum ChatTab: String, CaseIterable {
-    case messages = "Messages"
-    case actionItems = "Action Items"
-    case decisions = "Decisions"
-}
-
 struct ChatView: View {
     let conversation: ConversationEntity
-    let currentUser: AuthService.AppUser
+    let currentUser: AuthCoordinator.AppUser
     private let conversationId: String
     private let participantIds: [String]
     private let scrollToMessageId: String?
 
-    @Environment(MessagingService.self) private var messagingService
-    @Environment(AuthService.self) private var authService
-    @Environment(NotificationService.self) private var notificationService
-    @Environment(FirestoreService.self) private var firestoreService
+    @Environment(MessagingCoordinator.self) private var messagingCoordinator
+    @Environment(AuthCoordinator.self) private var authService
+    @Environment(NotificationCoordinator.self) private var notificationService
+    @Environment(FirestoreCoordinator.self) private var firestoreCoordinator
     @Environment(NetworkMonitor.self) private var networkMonitor
-    @Environment(AIFeaturesService.self) private var aiFeaturesService
+    @Environment(AIFeaturesCoordinator.self) private var aiCoordinator
     @Environment(TypingStatusService.self) private var typingStatusService
     @Environment(\.modelContext) private var modelContext
 
@@ -78,7 +72,7 @@ struct ChatView: View {
         }
     }
 
-    init(conversation: ConversationEntity, currentUser: AuthService.AppUser, scrollToMessageId: String? = nil) {
+    init(conversation: ConversationEntity, currentUser: AuthCoordinator.AppUser, scrollToMessageId: String? = nil) {
         let conversationId = conversation.id
         let participantIds = conversation.participantIds
 
@@ -145,20 +139,20 @@ struct ChatView: View {
         .onAppear {
             notificationService.setActiveConversation(conversationId)
             // Start Firestore listeners for AI features
-            firestoreService.startActionItemsListener(conversationId: conversationId, modelContext: modelContext)
-            firestoreService.startDecisionsListener(conversationId: conversationId, modelContext: modelContext)
+            firestoreCoordinator.startActionItemsListener(conversationId: conversationId, modelContext: modelContext)
+            firestoreCoordinator.startDecisionsListener(conversationId: conversationId, modelContext: modelContext)
         }
         .onDisappear {
             notificationService.setActiveConversation(nil)
             // Stop Firestore listeners to prevent memory leaks
-            firestoreService.stopActionItemsListener(conversationId: conversationId)
-            firestoreService.stopDecisionsListener(conversationId: conversationId)
+            firestoreCoordinator.stopActionItemsListener(conversationId: conversationId)
+            firestoreCoordinator.stopDecisionsListener(conversationId: conversationId)
         }
         .sheet(isPresented: $showingSummary) {
             NavigationStack {
                 ScrollView {
                     ThreadSummaryCard(
-                        summary: aiFeaturesService.fetchThreadSummary(for: conversationId).map { entity in
+                        summary: aiCoordinator.summaryService.fetchThreadSummary(for: conversationId).map { entity in
                             ThreadSummaryResponse(
                                 summary: entity.summary,
                                 keyPoints: entity.keyPoints,
@@ -167,12 +161,12 @@ struct ChatView: View {
                                 messageCount: entity.messageCount
                             )
                         },
-                        isLoading: aiFeaturesService.summaryLoadingStates[conversationId] ?? false,
-                        error: aiFeaturesService.summaryErrors[conversationId],
+                        isLoading: aiCoordinator.summaryService.state.isLoading(conversationId),
+                        error: aiCoordinator.summaryService.state.error(for: conversationId),
                         onRefresh: {
                             Task {
                                 do {
-                                    _ = try await aiFeaturesService.summarizeThreadTask(
+                                    _ = try await aiCoordinator.summaryService.summarizeThread(
                                         conversationId: conversationId,
                                         forceRefresh: true
                                     )
@@ -198,14 +192,14 @@ struct ChatView: View {
         .onAppear {
             notificationService.setActiveConversation(conversationId)
             // Start Firestore listeners for AI features
-            firestoreService.startActionItemsListener(conversationId: conversationId, modelContext: modelContext)
-            firestoreService.startDecisionsListener(conversationId: conversationId, modelContext: modelContext)
+            firestoreCoordinator.startActionItemsListener(conversationId: conversationId, modelContext: modelContext)
+            firestoreCoordinator.startDecisionsListener(conversationId: conversationId, modelContext: modelContext)
         }
         .onDisappear {
             notificationService.setActiveConversation(nil)
             // Stop Firestore listeners to prevent memory leaks
-            firestoreService.stopActionItemsListener(conversationId: conversationId)
-            firestoreService.stopDecisionsListener(conversationId: conversationId)
+            firestoreCoordinator.stopActionItemsListener(conversationId: conversationId)
+            firestoreCoordinator.stopDecisionsListener(conversationId: conversationId)
             typingStatusService.stopObserving(conversationId: conversationId)
         }
         .task {
@@ -267,7 +261,7 @@ struct ChatView: View {
                                         isOnline: networkMonitor.isConnected,
                                         onRetryMessage: {
                                             Task {
-                                                try? await messagingService.retryFailedMessage(messageId: message.id)
+                                                try? await messagingCoordinator.retryFailedMessage(messageId: message.id)
                                             }
                                         }
                                     )
@@ -293,14 +287,14 @@ struct ChatView: View {
                 .onTapGesture {
                     // Track user interaction on tap
                     Task {
-                        await messagingService.markConversationAsRead(conversationId)
+                        await messagingCoordinator.markConversationAsRead(conversationId)
                     }
                 }
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 5).onChanged { _ in
                         // Track user interaction on scroll
                         Task {
-                            await messagingService.markConversationAsRead(conversationId)
+                            await messagingCoordinator.markConversationAsRead(conversationId)
                         }
                     }
                 )
@@ -317,7 +311,7 @@ struct ChatView: View {
                     }
 
                     Task {
-                        await messagingService.markConversationAsRead(conversationId)
+                        await messagingCoordinator.markConversationAsRead(conversationId)
                     }
                 }
                 .onChange(of: isBotTyping) { _, isTyping in
@@ -327,17 +321,20 @@ struct ChatView: View {
                         }
                     }
                 }
-                .onChange(of: aiFeaturesService.schedulingIntentDetected[conversationId]) { _, detected in
+                .onChange(of: aiCoordinator.schedulingService.intentDetected[conversationId]) { _, detected in
                     // Auto-show banner when scheduling intent is detected
-                    if detected == true && !aiFeaturesService.isSchedulingSuggestionsSnoozed(for: conversationId) {
+                    if detected == true && !aiCoordinator.schedulingService.isSchedulingSuggestionsSnoozed(for: conversationId) {
                         withAnimation(.easeInOut(duration: 0.3)) {
                             showSchedulingBanner = true
                         }
                     }
                 }
                 .task {
-                    messagingService.ensureMessageListener(for: conversationId)
-                    await messagingService.markConversationAsRead(conversationId)
+                    #if DEBUG
+                    print("[ChatView] Starting message listener for conversation: \(conversationId)")
+                    #endif
+                    messagingCoordinator.ensureMessageListener(for: conversationId)
+                    await messagingCoordinator.markConversationAsRead(conversationId)
 
                     // Scroll to specific message if provided (from search), otherwise scroll to bottom
                     if let messageId = scrollToMessageId, !hasScrolledToMessage {
@@ -354,9 +351,9 @@ struct ChatView: View {
             }
 
             // Scheduling Intent Banner
-            if showSchedulingBanner && !aiFeaturesService.isSchedulingSuggestionsSnoozed(for: conversationId) {
+            if showSchedulingBanner && !aiCoordinator.schedulingService.isSchedulingSuggestionsSnoozed(for: conversationId) {
                 SchedulingIntentBanner(
-                    confidence: aiFeaturesService.schedulingIntentConfidence[conversationId] ?? 0.0,
+                    confidence: aiCoordinator.schedulingService.intentConfidence[conversationId] ?? 0.0,
                     onViewSuggestions: {
                         withAnimation {
                             showSchedulingBanner = false
@@ -366,7 +363,7 @@ struct ChatView: View {
                     },
                     onSnooze: {
                         do {
-                            try aiFeaturesService.snoozeSchedulingSuggestions(for: conversationId)
+                            try aiCoordinator.schedulingService.snoozeSuggestions(for: conversationId)
                             withAnimation {
                                 showSchedulingBanner = false
                             }
@@ -388,8 +385,8 @@ struct ChatView: View {
             if showMeetingSuggestions {
                 MeetingSuggestionsPanel(
                     suggestions: meetingSuggestions,
-                    isLoading: aiFeaturesService.meetingSuggestionsLoadingStates[conversationId] ?? false,
-                    error: aiFeaturesService.meetingSuggestionsErrors[conversationId],
+                    isLoading: aiCoordinator.meetingSuggestionsService.state.isLoading(conversationId),
+                    error: aiCoordinator.meetingSuggestionsService.state.error(for: conversationId),
                     onRefresh: { loadMeetingSuggestions(forceRefresh: true) },
                     onCopy: { suggestion in
                         copyMeetingSuggestion(suggestion)
@@ -414,8 +411,10 @@ struct ChatView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(activeTypers) { typer in
                         TypingBubble(
+                            user: participantLookup[typer.userId],
                             displayName: participantLookup[typer.userId]?.displayName ?? typer.displayName,
-                            isGroupChat: conversation.isGroup
+                            isGroupChat: conversation.isGroup,
+                            isOnline: networkMonitor.isConnected
                         )
                     }
                 }
@@ -471,7 +470,7 @@ struct ChatView: View {
             defer { isSending = false }
             do {
                 // Send user's message
-                try await messagingService.sendMessage(conversationId: conversationId, text: content)
+                try await messagingCoordinator.sendMessage(conversationId: conversationId, text: content)
                 messageText = ""
 
                 // Clear typing status
@@ -486,7 +485,7 @@ struct ChatView: View {
                     do {
                         // Build conversation history from captured data
                         let conversationHistory = currentMessages.map { msg in
-                            FirestoreService.AgentMessage(
+                            BotAgentService.AgentMessage(
                                 role: msg.senderId == currentUser.id ? "user" : "assistant",
                                 content: msg.text
                             )
@@ -494,13 +493,13 @@ struct ChatView: View {
 
                         // Add the current message to history
                         let fullHistory = conversationHistory + [
-                            FirestoreService.AgentMessage(
+                            BotAgentService.AgentMessage(
                                 role: "user",
                                 content: content
                             )
                         ]
 
-                        try await firestoreService.chatWithAgent(
+                        try await firestoreCoordinator.chatWithAgent(
                             messages: fullHistory,
                             conversationId: conversationId
                         )
@@ -551,7 +550,7 @@ struct ChatView: View {
 
         Task {
             do {
-                let response = try await aiFeaturesService.suggestMeetingTimes(
+                let response = try await aiCoordinator.meetingSuggestionsService.suggestMeetingTimes(
                     conversationId: conversationId,
                     participantIds: participantIds.filter { !$0.hasPrefix("bot:") },
                     durationMinutes: 60, // Default 1 hour
@@ -585,7 +584,7 @@ struct ChatView: View {
 
         // Track analytics
         Task {
-            await aiFeaturesService.trackMeetingSuggestionInteraction(
+            await aiCoordinator.meetingSuggestionsService.trackInteraction(
                 conversationId: conversationId,
                 action: "copy",
                 suggestionIndex: meetingSuggestions?.suggestions.firstIndex(where: { $0.id == suggestion.id }) ?? 0,
@@ -621,7 +620,7 @@ struct ChatView: View {
 
         // Track analytics
         Task {
-            await aiFeaturesService.trackMeetingSuggestionInteraction(
+            await aiCoordinator.meetingSuggestionsService.trackInteraction(
                 conversationId: conversationId,
                 action: "share",
                 suggestionIndex: meetingSuggestions?.suggestions.firstIndex(where: { $0.id == suggestion.id }) ?? 0,
@@ -672,7 +671,7 @@ struct ChatView: View {
 
         // Track analytics
         Task {
-            await aiFeaturesService.trackMeetingSuggestionInteraction(
+            await aiCoordinator.meetingSuggestionsService.trackInteraction(
                 conversationId: conversationId,
                 action: "add_to_calendar",
                 suggestionIndex: meetingSuggestions?.suggestions.firstIndex(where: { $0.id == suggestion.id }) ?? 0,
@@ -682,684 +681,3 @@ struct ChatView: View {
     }
 }
 
-private struct MessageBubble: View {
-    let message: MessageEntity
-    let isCurrentUser: Bool
-    let currentUserId: String
-    let conversation: ConversationEntity
-    let sender: UserEntity?
-    let bot: BotEntity?
-    let participants: [UserEntity]
-    let isOnline: Bool
-    let onRetryMessage: (() -> Void)?
-    @State private var showingReceiptDetails = false
-
-    private var displayName: String {
-        if let bot {
-            return bot.name
-        }
-        return sender?.displayName ?? "Unknown"
-    }
-
-    private var avatarURL: String? {
-        if let bot {
-            return bot.avatarURL
-        }
-        return sender?.profilePictureURL
-    }
-
-    private var presenceStatus: PresenceStatus {
-        sender?.presenceStatus ?? .offline
-    }
-
-    private static let palette: [Color] = [
-        Color(red: 0.17, green: 0.33, blue: 0.82),  // Blue
-        Color(red: 0.12, green: 0.55, blue: 0.35),  // Green
-        Color(red: 0.56, green: 0.17, blue: 0.68),  // Purple
-        Color(red: 0.78, green: 0.20, blue: 0.20),  // Red
-        Color(red: 0.94, green: 0.49, blue: 0.12),  // Orange
-        Color(red: 0.95, green: 0.55, blue: 0.65),  // Pink
-        Color(red: 0.20, green: 0.60, blue: 0.86),  // Light Blue
-        Color(red: 0.45, green: 0.55, blue: 0.20)   // Olive
-    ]
-
-    private var participantLookup: [String: UserEntity] {
-        Dictionary(uniqueKeysWithValues: participants.map { ($0.id, $0) })
-    }
-
-    private var bubbleColor: Color {
-        guard !isCurrentUser else { return Color.accentColor }
-        let identifier = sender?.id ?? message.senderId
-        return getConsistentColorForUser(identifier)
-    }
-
-    private var textColor: Color { Color.white }
-
-    private var metaTextColor: Color {
-        Color(.secondaryLabel)
-    }
-
-    private var timestampColor: Color {
-        Color(.label)
-    }
-
-    private var timestampText: String {
-        message.timestamp.formatted(date: .omitted, time: .shortened)
-    }
-
-    // All unique participant IDs sorted alphabetically (for consistent color assignment)
-    // Sort by USER ID ONLY - not display name - for truly stable colors
-    private var sortedAllParticipantIds: [String] {
-        // Use only the stable participant list from the conversation
-        let allIds = Set(conversation.participantIds)
-
-        // Sort by USER ID directly - this NEVER changes
-        return allIds.sorted { lhs, rhs in
-            if lhs == currentUserId { return true }
-            if rhs == currentUserId { return false }
-            // Sort by actual ID string, not display name
-            return lhs < rhs
-        }
-    }
-
-    // For display order in checkmarks (sender first, then current user, then others)
-    // This can include all participants including those in lastInteractionByUser
-    private var orderedParticipantIds: [String] {
-        var allIds = Set<String>()
-        allIds.formUnion(conversation.participantIds)
-        allIds.insert(message.senderId)
-        allIds.insert(currentUserId)
-        allIds.formUnion(conversation.lastInteractionByUser.keys)
-
-        return allIds.sorted { lhs, rhs in
-            if lhs == message.senderId { return true }
-            if rhs == message.senderId { return false }
-            if lhs == currentUserId { return true }
-            if rhs == currentUserId { return false }
-            // Sort by ID for stable ordering (display can use names separately)
-            return lhs < rhs
-        }
-    }
-
-    private func getConsistentColorForUser(_ userId: String) -> Color {
-        if userId == currentUserId {
-            return Color.accentColor
-        }
-        // Find position in sorted list (excluding current user for color assignment)
-        let nonCurrentUserIds = sortedAllParticipantIds.filter { $0 != currentUserId }
-        if let position = nonCurrentUserIds.firstIndex(of: userId) {
-            let index = position % MessageBubble.palette.count
-            return MessageBubble.palette[index]
-        }
-        // Fallback (shouldn't happen)
-        return MessageBubble.palette[0]
-    }
-
-    private func hasSeen(_ userId: String) -> Bool {
-        let userInteraction = conversation.lastInteractionByUser[userId] ?? .distantPast
-        let messageTime = message.timestamp
-        // Use >= to include exact matches (sender's own messages)
-        return userInteraction >= messageTime
-    }
-
-    private var otherRecipientIds: [String] {
-        orderedParticipantIds.filter { $0 != currentUserId && $0 != message.senderId }
-    }
-
-    private var seenRecipientCount: Int {
-        otherRecipientIds.filter { hasSeen($0) }.count
-    }
-
-    private var totalRecipientCount: Int {
-        otherRecipientIds.count
-    }
-
-    private var receiptEntries: [ReadStatusEntry] {
-        orderedParticipantIds.map { userId in
-            let user = participantLookup[userId]
-            let isSender = userId == message.senderId
-            let isSelf = userId == currentUserId
-
-            let isComplete: Bool
-            let statusText: String
-
-            if isSender {
-                // For the sender themselves viewing their own message
-                if isSelf {
-                    // Show complete only when message has hit server
-                    isComplete = message.deliveryState != .pending
-                    statusText = message.deliveryState == .pending ? "Sending" : "Sent"
-                } else {
-                    // For recipients viewing the sender's checkmark - always complete
-                    // (they wouldn't see the message if it wasn't sent)
-                    isComplete = true
-                    statusText = "Sent"
-                }
-            } else {
-                // For non-senders, check their interaction timestamp
-                isComplete = hasSeen(userId)
-                statusText = isComplete ? "Seen" : "Waiting"
-            }
-
-            let displayName: String
-            if isSelf {
-                displayName = "You"
-            } else if let user {
-                displayName = user.displayName
-            } else {
-                displayName = userId
-            }
-
-            return ReadStatusEntry(
-                id: userId,
-                displayName: displayName,
-                initials: initials(for: userId),
-                isSender: isSender,
-                isSelf: isSelf,
-                isComplete: isComplete,
-                statusText: statusText,
-                color: participantColor(for: userId, isSender: isSender, isSelf: isSelf)
-            )
-        }
-    }
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            if isCurrentUser { Spacer(minLength: 40) }
-
-            if !isCurrentUser {
-                if let bot {
-                    AvatarView(
-                        bot: bot,
-                        size: 32,
-                        showPresenceIndicator: true,
-                        isOnline: isOnline
-                    )
-                } else if let sender {
-                    AvatarView(
-                        user: sender,
-                        size: 32,
-                        showPresenceIndicator: true,
-                        isOnline: isOnline
-                    )
-                } else {
-                    AvatarView(
-                        entity: .custom(initials: senderInitials, profileURL: avatarURL),
-                        size: 32,
-                        showPresenceIndicator: true,
-                        isOnline: isOnline
-                    )
-                }
-            }
-
-            VStack(alignment: isCurrentUser ? .trailing : .leading, spacing: 4) {
-                bubbleContent
-                metadataRow
-            }
-            .frame(maxWidth: UIScreen.main.bounds.width * 0.7, alignment: isCurrentUser ? .trailing : .leading)
-
-            if isCurrentUser {
-                Spacer(minLength: 8)
-            } else {
-                Spacer()
-            }
-        }
-        .padding(.horizontal, isCurrentUser ? 0 : 4)
-        .transition(.move(edge: isCurrentUser ? .trailing : .leading).combined(with: .opacity))
-    }
-
-    private var senderInitials: String {
-        return initials(from: displayName)
-    }
-
-    private var bubbleContent: some View {
-        Text(message.text)
-            .foregroundStyle(textColor)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(bubbleColor)
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay(alignment: .topTrailing) {
-                if message.hasPriorityData && message.priority.sortOrder >= PriorityLevel.high.sortOrder {
-                    Text(message.priority.emoji)
-                        .font(.caption2)
-                        .padding(4)
-                        .background(Color.black.opacity(0.3))
-                        .clipShape(Circle())
-                        .offset(x: 4, y: -4)
-                }
-            }
-    }
-
-    private var metadataRow: some View {
-        Button(action: { showingReceiptDetails.toggle() }) {
-            HStack(spacing: 6) {
-                Text(timestampText)
-                    .foregroundStyle(timestampColor)
-                    .font(.caption2)
-
-                // Show delivery state indicator for sender's own messages
-                if message.senderId == currentUserId {
-                    DeliveryStateIcon(
-                        state: message.deliveryState,
-                        onRetry: message.deliveryState == .failed ? onRetryMessage : nil,
-                        color: metaTextColor
-                    )
-                }
-
-                ForEach(receiptEntries) { entry in
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.caption2)
-                        .foregroundStyle(entry.color)
-                        .opacity(entry.isComplete ? 1 : 0.2)
-                }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .popover(isPresented: $showingReceiptDetails, attachmentAnchor: .rect(.bounds), arrowEdge: isCurrentUser ? .trailing : .leading) {
-            ReadStatusPopover(
-                entries: receiptEntries
-            )
-            .presentationCompactAdaptation(.popover)
-        }
-    }
-
-    private func initials(for userId: String) -> String {
-        if let user = participantLookup[userId] {
-            return initials(from: user.displayName)
-        }
-
-        if userId == currentUserId {
-            return "ME"
-        }
-
-        let cleaned = userId.replacingOccurrences(of: "-", with: " ")
-        let fromId = initials(from: cleaned)
-        if !fromId.isEmpty {
-            return fromId
-        }
-
-        let fallback = String(userId.prefix(2)).uppercased()
-        return fallback.isEmpty ? "?" : fallback
-    }
-
-    private func initials(from name: String) -> String {
-        let components = name.split(separator: " ")
-        let initials = components.prefix(2).compactMap { $0.first }.map(String.init)
-        let combined = initials.prefix(2).joined()
-        return combined.isEmpty ? "?" : combined
-    }
-
-    private func participantColor(for participantId: String, isSender: Bool, isSelf: Bool) -> Color {
-        // Use the same consistent color assignment for all participants
-        return getConsistentColorForUser(participantId)
-    }
-}
-
-private struct DeliveryStateIcon: View {
-    let state: MessageDeliveryState
-    let onRetry: (() -> Void)?
-    var color: Color
-
-    var body: some View {
-        switch state {
-        case .pending:
-            // Animated gray checkmark
-            Image(systemName: "checkmark")
-                .foregroundStyle(.gray)
-                .opacity(0.6)
-                .symbolEffect(.pulse)
-        case .sent:
-            // Single blue checkmark
-            Image(systemName: "checkmark")
-                .foregroundStyle(.blue)
-        case .delivered:
-            // Double blue checkmark (regular weight)
-            HStack(spacing: -4) {
-                Image(systemName: "checkmark")
-                    .foregroundStyle(.blue)
-                Image(systemName: "checkmark")
-                    .foregroundStyle(.blue)
-            }
-        case .read:
-            // Double blue checkmark (bold)
-            HStack(spacing: -4) {
-                Image(systemName: "checkmark")
-                    .foregroundStyle(.blue)
-                    .fontWeight(.bold)
-                Image(systemName: "checkmark")
-                    .foregroundStyle(.blue)
-                    .fontWeight(.bold)
-            }
-        case .failed:
-            // Red exclamation with retry
-            if let onRetry {
-                Button(action: onRetry) {
-                    Image(systemName: "exclamationmark.circle.fill")
-                        .foregroundStyle(.red)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Retry sending message")
-            } else {
-                Image(systemName: "exclamationmark.circle.fill")
-                    .foregroundStyle(.red)
-            }
-        }
-    }
-}
-
-// Legacy support
-private struct DeliveryStatusIcon: View {
-    let status: DeliveryStatus
-    var color: Color
-
-    var body: some View {
-        DeliveryStateIcon(
-            state: status.toDeliveryState,
-            onRetry: nil,
-            color: color
-        )
-    }
-}
-
-private struct ReadStatusEntry: Identifiable {
-    let id: String
-    let displayName: String
-    let initials: String
-    let isSender: Bool
-    let isSelf: Bool
-    let isComplete: Bool
-    let statusText: String
-    let color: Color
-}
-
-private struct ReadStatusPopover: View {
-    let entries: [ReadStatusEntry]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if entries.count > 1 {
-                Text("Read Receipts")
-                    .font(.caption.bold())
-                    .foregroundStyle(.secondary)
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(entries) { entry in
-                    HStack(spacing: 8) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(entry.color)
-                            .opacity(entry.isComplete ? 1 : 0.2)
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(entry.displayName)
-                                .font(.footnote.weight(.semibold))
-                            Text(entry.statusText)
-                                .font(.caption2)
-                                .foregroundStyle(entry.isComplete ? .secondary : Color.secondary.opacity(0.7))
-                        }
-
-                        Spacer()
-                    }
-                }
-            }
-        }
-        .padding(12)
-        .frame(minWidth: 200)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .fixedSize(horizontal: false, vertical: true)
-    }
-}
-
-private struct DateHeader: View {
-    let date: Date
-    private let formatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .none
-        return formatter
-    }()
-
-    var body: some View {
-        Text(formatter.string(from: date))
-            .font(.caption.bold())
-            .padding(.horizontal, 12)
-            .padding(.vertical, 4)
-            .background(Color.primary.opacity(0.1))
-            .clipShape(Capsule())
-            .frame(maxWidth: .infinity)
-    }
-}
-
-private struct TypingIndicator: View {
-    let bot: BotEntity?
-    let isOnline: Bool
-
-    var body: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            if let bot {
-                AvatarView(
-                    bot: bot,
-                    size: 32,
-                    showPresenceIndicator: true,
-                    isOnline: isOnline
-                )
-            }
-
-            HStack(spacing: 4) {
-                ForEach(0..<3) { index in
-                    Circle()
-                        .fill(Color.gray.opacity(0.5))
-                        .frame(width: 8, height: 8)
-                        .scaleEffect(animationScale)
-                        .animation(
-                            Animation.easeInOut(duration: 0.6)
-                                .repeatForever()
-                                .delay(Double(index) * 0.2),
-                            value: animationScale
-                        )
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color(.systemGray5))
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-
-            Spacer()
-        }
-        .padding(.leading, 8)
-        .onAppear {
-            animationScale = 1.2
-        }
-    }
-
-    @State private var animationScale: CGFloat = 0.8
-}
-
-private struct ComposerView: View {
-    @Binding var messageText: String
-    let isSending: Bool
-    let sendAction: () -> Void
-
-    var body: some View {
-        HStack(alignment: .bottom, spacing: 12) {
-            TextField("Message", text: $messageText, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
-                .lineLimit(1...4)
-
-            Button(action: sendAction) {
-                if isSending {
-                    ProgressView()
-                } else {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 28, height: 28)
-                }
-            }
-            .disabled(isSending || messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(Color(.systemBackground))
-    }
-}
-
-// MARK: - Scheduling Intent Banner
-
-struct SchedulingIntentBanner: View {
-    let confidence: Double
-    let onViewSuggestions: () -> Void
-    let onSnooze: () -> Void
-    let onDismiss: () -> Void
-
-    private var confidenceText: String {
-        if confidence >= 0.8 {
-            return "High confidence"
-        } else if confidence >= 0.6 {
-            return "Medium confidence"
-        } else {
-            return "Detected"
-        }
-    }
-
-    private var confidenceColor: Color {
-        if confidence >= 0.8 {
-            return .green
-        } else if confidence >= 0.6 {
-            return .orange
-        } else {
-            return .blue
-        }
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                // Icon
-                ZStack {
-                    Circle()
-                        .fill(confidenceColor.opacity(0.15))
-                        .frame(width: 40, height: 40)
-                    Image(systemName: "calendar.badge.clock")
-                        .font(.system(size: 18))
-                        .foregroundStyle(confidenceColor)
-                }
-
-                // Content
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Scheduling Intent Detected")
-                        .font(.subheadline.bold())
-                        .foregroundStyle(.primary)
-
-                    HStack(spacing: 4) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.caption2)
-                        Text(confidenceText)
-                            .font(.caption)
-                    }
-                    .foregroundStyle(confidenceColor)
-                }
-
-                Spacer()
-
-                // Close button
-                Button(action: onDismiss) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .padding(16)
-
-            // Action buttons
-            HStack(spacing: 12) {
-                Button(action: onSnooze) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "clock.fill")
-                            .font(.caption)
-                        Text("Snooze 1h")
-                            .font(.subheadline.weight(.medium))
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .background(Color(.systemGray6))
-                    .foregroundStyle(.secondary)
-                    .cornerRadius(8)
-                }
-
-                Button(action: onViewSuggestions) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "sparkles")
-                            .font(.caption)
-                        Text("View Suggestions")
-                            .font(.subheadline.weight(.semibold))
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .background(confidenceColor)
-                    .foregroundStyle(.white)
-                    .cornerRadius(8)
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 16)
-        }
-        .background(Color(.systemBackground))
-        .cornerRadius(12)
-        .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-    }
-}
-
-// MARK: - TypingBubble Component
-private struct TypingBubble: View {
-    let displayName: String
-    let isGroupChat: Bool
-
-    var body: some View {
-        HStack(spacing: 6) {
-            // Show name for group chats
-            if isGroupChat {
-                Text(displayName)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            // Animated dots
-            HStack(spacing: 4) {
-                ForEach(0..<3) { index in
-                    Circle()
-                        .fill(Color.gray.opacity(0.6))
-                        .frame(width: 6, height: 6)
-                        .animation(
-                            Animation.easeInOut(duration: 0.6)
-                                .repeatForever()
-                                .delay(Double(index) * 0.2),
-                            value: true
-                        )
-                        .offset(y: animationOffset(for: index))
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color(.systemGray5))
-            .cornerRadius(16)
-        }
-        .accessibilityLabel(isGroupChat ? "\(displayName) is typing" : "User is typing")
-    }
-
-    @State private var isAnimating = false
-
-    private func animationOffset(for index: Int) -> CGFloat {
-        isAnimating ? -4 : 0
-    }
-
-    init(displayName: String, isGroupChat: Bool) {
-        self.displayName = displayName
-        self.isGroupChat = isGroupChat
-        _isAnimating = State(initialValue: true)
-    }
-}

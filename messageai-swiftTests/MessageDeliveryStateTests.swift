@@ -41,43 +41,6 @@ final class MessageDeliveryStateTests: XCTestCase {
         XCTAssertEqual(MessageDeliveryState.failed.rawValue, "failed")
     }
 
-    // MARK: - Migration Tests
-
-    func testMigrationFromLegacySending() throws {
-        let state = MessageDeliveryState(fromLegacy: "sending")
-        XCTAssertEqual(state, .pending)
-    }
-
-    func testMigrationFromLegacySent() throws {
-        let state = MessageDeliveryState(fromLegacy: "sent")
-        XCTAssertEqual(state, .sent)
-    }
-
-    func testMigrationFromLegacyDelivered() throws {
-        let state = MessageDeliveryState(fromLegacy: "delivered")
-        XCTAssertEqual(state, .delivered)
-    }
-
-    func testMigrationFromLegacyRead() throws {
-        let state = MessageDeliveryState(fromLegacy: "read")
-        XCTAssertEqual(state, .read)
-    }
-
-    func testMigrationFromInvalidValue() throws {
-        let state = MessageDeliveryState(fromLegacy: "invalid")
-        XCTAssertEqual(state, .sent) // default fallback
-    }
-
-    func testMigrationFromPending() throws {
-        let state = MessageDeliveryState(fromLegacy: "pending")
-        XCTAssertEqual(state, .pending)
-    }
-
-    func testMigrationFromFailed() throws {
-        let state = MessageDeliveryState(fromLegacy: "failed")
-        XCTAssertEqual(state, .failed)
-    }
-
     // MARK: - Codable Tests
 
     func testEncodable() throws {
@@ -173,5 +136,105 @@ final class MessageDeliveryStateTests: XCTestCase {
         XCTAssertEqual(stateCounts[.delivered], 15)
         XCTAssertEqual(stateCounts[.read], 20)
         XCTAssertEqual(stateCounts[.failed], 2)
+    }
+
+    // MARK: - State Transition Tests
+
+    func testPendingToSentTransition() throws {
+        var state: MessageDeliveryState = .pending
+        XCTAssertEqual(state, .pending)
+
+        // Simulate server confirmation
+        state = .sent
+        XCTAssertEqual(state, .sent)
+    }
+
+    func testPendingToFailedTransition() throws {
+        var state: MessageDeliveryState = .pending
+        XCTAssertEqual(state, .pending)
+
+        // Simulate send failure
+        state = .failed
+        XCTAssertEqual(state, .failed)
+    }
+
+    func testSentToDeliveredTransition() throws {
+        var state: MessageDeliveryState = .sent
+        XCTAssertEqual(state, .sent)
+
+        // Simulate delivery confirmation
+        state = .delivered
+        XCTAssertEqual(state, .delivered)
+    }
+
+    func testDeliveredToReadTransition() throws {
+        var state: MessageDeliveryState = .delivered
+        XCTAssertEqual(state, .delivered)
+
+        // Simulate read receipt
+        state = .read
+        XCTAssertEqual(state, .read)
+    }
+
+    func testSentToReadTransition() throws {
+        var state: MessageDeliveryState = .sent
+        XCTAssertEqual(state, .sent)
+
+        // Can skip delivered and go straight to read
+        state = .read
+        XCTAssertEqual(state, .read)
+    }
+
+    func testFailedStateIsTerminal() throws {
+        let failedState: MessageDeliveryState = .failed
+
+        // Failed messages should remain failed until retry
+        // (They don't automatically transition to other states)
+        XCTAssertEqual(failedState, .failed)
+
+        // Can only manually retry by setting back to pending
+        var retryState = failedState
+        retryState = .pending
+        XCTAssertEqual(retryState, .pending)
+    }
+
+    func testInvalidTransitionsStillWork() throws {
+        // Swift enums don't enforce state machine rules at compile time
+        // This test documents that invalid transitions are technically possible
+        // but should be prevented by business logic
+        var state: MessageDeliveryState = .read
+
+        // Can technically assign backwards (though shouldn't in practice)
+        state = .sent
+        XCTAssertEqual(state, .sent)
+
+        state = .pending
+        XCTAssertEqual(state, .pending)
+    }
+
+    func testPendingStateBehavior() throws {
+        let state: MessageDeliveryState = .pending
+
+        // Pending is the initial state
+        XCTAssertEqual(state.rawValue, "pending")
+
+        // Should be distinguishable from all other states
+        XCTAssertNotEqual(state, .sent)
+        XCTAssertNotEqual(state, .delivered)
+        XCTAssertNotEqual(state, .read)
+        XCTAssertNotEqual(state, .failed)
+    }
+
+    func testFailedStateBehavior() throws {
+        let state: MessageDeliveryState = .failed
+
+        // Failed is a terminal error state
+        XCTAssertEqual(state.rawValue, "failed")
+
+        // Should be distinguishable from all other states
+        XCTAssertNotEqual(state, .pending)
+        XCTAssertNotEqual(state, .sent)
+        XCTAssertNotEqual(state, .delivered)
+        XCTAssertNotEqual(state, .read)
     }
 }

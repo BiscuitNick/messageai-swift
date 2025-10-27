@@ -10,7 +10,7 @@ import SwiftData
 import SwiftUI
 
 struct UsersDebugView: View {
-    let currentUser: AuthService.AppUser
+    let currentUser: AuthCoordinator.AppUser
 
     @Query private var users: [UserEntity]
     @Environment(NetworkMonitor.self) private var networkMonitor

@@ -14,12 +14,12 @@ import UserNotifications
 @main
 struct messageai_swiftApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @State private var authService: AuthService
-    @State private var firestoreService: FirestoreService
-    @State private var messagingService: MessagingService
-    @State private var notificationService: NotificationService
+    @State private var authService: AuthCoordinator
+    @State private var firestoreCoordinator: FirestoreCoordinator
+    @State private var messagingCoordinator: MessagingCoordinator
+    @State private var notificationService: NotificationCoordinator
     @State private var networkMonitor: NetworkMonitor
-    @State private var aiFeaturesService: AIFeaturesService
+    @State private var aiCoordinator: AIFeaturesCoordinator
     @State private var typingStatusService: TypingStatusService
     @State private var networkSimulator: NetworkSimulator
     var sharedModelContainer: ModelContainer = {
@@ -49,15 +49,15 @@ struct messageai_swiftApp: App {
 
     init() {
         FirebaseApp.configure()
-        let firestore = FirestoreService()
-        let notification = NotificationService()
-        // Note: NotificationService.configure() is called in ContentView after AIFeaturesService is available
-        _firestoreService = State(wrappedValue: firestore)
-        _authService = State(wrappedValue: AuthService())
-        _messagingService = State(wrappedValue: MessagingService())
+        let firestore = FirestoreCoordinator()
+        let notification = NotificationCoordinator()
+        // Note: NotificationCoordinator.configure() is called in ContentView after AIFeaturesCoordinator is available
+        _firestoreCoordinator = State(wrappedValue: firestore)
+        _authService = State(wrappedValue: AuthCoordinator())
+        _messagingCoordinator = State(wrappedValue: MessagingCoordinator())
         _notificationService = State(wrappedValue: notification)
         _networkMonitor = State(wrappedValue: NetworkMonitor())
-        _aiFeaturesService = State(wrappedValue: AIFeaturesService())
+        _aiCoordinator = State(wrappedValue: AIFeaturesCoordinator())
         _typingStatusService = State(wrappedValue: TypingStatusService())
         _networkSimulator = State(wrappedValue: NetworkSimulator())
         appDelegate.notificationService = notification
@@ -67,11 +67,11 @@ struct messageai_swiftApp: App {
         WindowGroup {
             ContentView()
                 .environment(authService)
-                .environment(firestoreService)
-                .environment(messagingService)
+                .environment(firestoreCoordinator)
+                .environment(messagingCoordinator)
                 .environment(notificationService)
                 .environment(networkMonitor)
-                .environment(aiFeaturesService)
+                .environment(aiCoordinator)
                 .environment(typingStatusService)
                 .environment(networkSimulator)
         }
@@ -80,7 +80,7 @@ struct messageai_swiftApp: App {
 }
 
 final class AppDelegate: NSObject, UIApplicationDelegate {
-    var notificationService: NotificationService?
+    var notificationService: NotificationCoordinator?
 
     func application(
         _ application: UIApplication,

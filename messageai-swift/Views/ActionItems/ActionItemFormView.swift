@@ -16,7 +16,7 @@ struct ActionItemFormView: View {
     let onCancel: () -> Void
 
     @Environment(\.modelContext) private var modelContext
-    @Environment(FirestoreService.self) private var firestoreService
+    @Environment(FirestoreCoordinator.self) private var firestoreCoordinator
 
     @State private var task: String = ""
     @State private var priority: ActionItemPriority = .medium
@@ -129,7 +129,7 @@ struct ActionItemFormView: View {
                     try modelContext.save()
 
                     // Sync to Firestore
-                    try await firestoreService.updateActionItem(
+                    try await firestoreCoordinator.updateActionItem(
                         conversationId: conversationId,
                         actionItemId: existing.id,
                         task: trimmedTask,
@@ -159,7 +159,7 @@ struct ActionItemFormView: View {
                     try modelContext.save()
 
                     // Sync to Firestore
-                    try await firestoreService.createActionItem(
+                    try await firestoreCoordinator.createActionItem(
                         conversationId: conversationId,
                         actionItemId: itemId,
                         task: trimmedTask,

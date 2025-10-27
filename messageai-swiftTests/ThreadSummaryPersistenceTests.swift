@@ -36,7 +36,7 @@ final class ThreadSummaryPersistenceTests: XCTestCase {
         service = AIFeaturesService()
         service.configure(
             modelContext: modelContext,
-            authService: AuthService(),
+            authService: AuthCoordinator(),
             messagingService: MessagingService(),
             firestoreService: FirestoreService(),
             networkMonitor: networkMonitor

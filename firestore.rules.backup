@@ -1,0 +1,144 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isDocumentOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    function isConversationParticipant(conversationData) {
+      return request.auth != null
+          && conversationData.participantIds.hasAny([request.auth.uid]);
+    }
+
+    match /users/{userId} {
+      allow read: if isAuthenticated()
+        && (isDocumentOwner(userId) || resource.data.visibility == 'public' || true);
+
+      allow create: if isDocumentOwner(userId);
+
+      allow update: if isDocumentOwner(userId);
+
+      allow delete: if false;
+    }
+
+    match /bots/{botId} {
+      allow read: if isAuthenticated();
+
+      allow create, update: if isAuthenticated();
+
+      allow delete: if false;
+    }
+
+    match /conversations/{conversationId} {
+      allow read: if isAuthenticated()
+        && isConversationParticipant(resource.data);
+
+      allow create: if isAuthenticated()
+        && isConversationParticipant(request.resource.data)
+        && request.resource.data.participantIds.size() >= 2;
+
+      allow update: if isAuthenticated()
+        && isConversationParticipant(resource.data)
+        && isConversationParticipant(request.resource.data);
+
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        allow read: if isAuthenticated()
+          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
+
+        allow create: if isAuthenticated()
+          && (request.resource.data.senderId == request.auth.uid
+              || request.resource.data.senderId.matches('bot:.*'))
+          && request.resource.data.conversationId == conversationId
+          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
+
+        allow update: if isAuthenticated()
+          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data)
+          && (request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'deliveryStatus', 'deliveryState', 'readBy', 'readReceipts', 'updatedAt'
+             ])
+             || request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'deliveryStatus', 'deliveryState', 'updatedAt'
+             ])
+             || request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'readBy', 'readReceipts', 'updatedAt'
+             ]))
+          && request.resource.data.senderId == resource.data.senderId
+          && request.resource.data.conversationId == resource.data.conversationId;
+
+        allow delete: if false;
+      }
+
+      match /actionItems/{actionItemId} {
+        allow read: if isAuthenticated()
+          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
+
+        allow create, update: if isAuthenticated()
+          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data)
+          && request.resource.data.conversationId == conversationId;
+
+        allow delete: if isAuthenticated()
+          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
+      }
+
+      match /decisions/{decisionId} {
+        allow read: if isAuthenticated()
+          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
+
+        allow create: if isAuthenticated()
+          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data)
+          && request.resource.data.conversationId == conversationId;
+
+        allow update: if isAuthenticated()
+          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
+
+        allow delete: if isAuthenticated()
+          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
+      }
+
+      match /typing/{userId} {
+        allow read: if isAuthenticated()
+          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
+
+        allow write: if isAuthenticated()
+          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data)
+          && request.auth.uid == userId;
+
+        allow delete: if isAuthenticated()
+          && isConversationParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data)
+          && request.auth.uid == userId;
+      }
+    }
+
+    // AI Telemetry - authenticated users can write their own telemetry events
+    match /ai_telemetry/{eventId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated()
+                   && request.resource.data.userId == request.auth.uid;
+      allow delete: if false;
+    }
+
+    // AI Feedback - authenticated users can write their own feedback
+    match /ai_feedback/{feedbackId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated()
+                   && request.resource.data.userId == request.auth.uid;
+      allow delete: if false;
+    }
+
+    // Coordination Insights - written by Cloud Functions, read by authenticated users
+    match /coordinationInsights/{insightId} {
+      // Allow authenticated users to read insights
+      // Cloud Functions use Admin SDK which bypasses these rules for writes
+      allow read: if isAuthenticated();
+      allow write: if false; // Client writes blocked - only Cloud Functions can write via Admin SDK
+      allow delete: if false;
+    }
+  }
+}

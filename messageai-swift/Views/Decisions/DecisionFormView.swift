@@ -16,7 +16,7 @@ struct DecisionFormView: View {
     let onCancel: () -> Void
 
     @Environment(\.modelContext) private var modelContext
-    @Environment(FirestoreService.self) private var firestoreService
+    @Environment(FirestoreCoordinator.self) private var firestoreCoordinator
 
     @State private var decisionText: String = ""
     @State private var contextSummary: String = ""
@@ -112,7 +112,7 @@ struct DecisionFormView: View {
                     try modelContext.save()
 
                     // Sync to Firestore
-                    try await firestoreService.updateDecision(
+                    try await firestoreCoordinator.updateDecision(
                         conversationId: conversationId,
                         decisionId: existing.id,
                         decisionText: trimmedDecisionText,
@@ -143,7 +143,7 @@ struct DecisionFormView: View {
                     try modelContext.save()
 
                     // Sync to Firestore
-                    try await firestoreService.createDecision(
+                    try await firestoreCoordinator.createDecision(
                         conversationId: conversationId,
                         decisionId: decisionId,
                         decisionText: trimmedDecisionText,

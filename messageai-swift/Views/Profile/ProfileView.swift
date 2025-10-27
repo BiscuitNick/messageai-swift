@@ -11,12 +11,12 @@ import SwiftUI
 import UIKit
 
 struct ProfileView: View {
-    let user: AuthService.AppUser
+    let user: AuthCoordinator.AppUser
     let onSignOut: () -> Void
     let showsDismissButton: Bool
 
     init(
-        user: AuthService.AppUser,
+        user: AuthCoordinator.AppUser,
         onSignOut: @escaping () -> Void,
         showsDismissButton: Bool = true
     ) {
@@ -25,13 +25,13 @@ struct ProfileView: View {
         self.showsDismissButton = showsDismissButton
     }
 
-    @Environment(AuthService.self) private var authService
+    @Environment(AuthCoordinator.self) private var authService
     @Environment(\.dismiss) private var dismiss
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var isUpdatingPhoto = false
     @State private var photoError: String?
 
-    private var displayedUser: AuthService.AppUser {
+    private var displayedUser: AuthCoordinator.AppUser {
         authService.currentUser ?? user
     }
 
@@ -77,7 +77,7 @@ struct ProfileView: View {
 
                 Section("Team Coordination") {
                     NavigationLink {
-                        CoordinationDashboardView()
+                        CoordinationDashboardView(currentUser: displayedUser)
                     } label: {
                         Label("Coordination Dashboard", systemImage: "chart.bar.doc.horizontal")
                     }

@@ -11,7 +11,7 @@ import SwiftData
 struct SmartSearchView: View {
     var onNavigate: ((SearchNavigationTarget) -> Void)?
 
-    @Environment(AIFeaturesService.self) private var aiFeaturesService
+    @Environment(AIFeaturesCoordinator.self) private var aiCoordinator
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
 
@@ -37,9 +37,9 @@ struct SmartSearchView: View {
                 searchBar
 
                 // Content
-                if aiFeaturesService.searchLoadingState {
+                if aiCoordinator.searchService.isLoading {
                     loadingView
-                } else if let error = aiFeaturesService.searchError {
+                } else if let error = aiCoordinator.searchService.errorMessage {
                     errorView(error)
                 } else if showingResults && searchResults.isEmpty {
                     emptyResultsView
@@ -244,7 +244,7 @@ struct SmartSearchView: View {
 
         Task {
             do {
-                let results = try await aiFeaturesService.smartSearch(query: searchQuery)
+                let results = try await aiCoordinator.searchService.search(query: searchQuery)
                 await MainActor.run {
                     searchResults = results
                     recentQueries = Array(allRecentQueries.prefix(10))

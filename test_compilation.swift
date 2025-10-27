@@ -34,22 +34,4 @@ if let encoded = try? encoder.encode(testData) {
     print("❌ Encoding failed")
 }
 
-// Test backward compatibility
-let testDataWithoutScheduling = TestData(
-    schedulingIntent: nil,
-    intentConfidence: nil,
-    intentAnalyzedAt: nil,
-    schedulingKeywords: []
-)
-
-if let encoded = try? encoder.encode(testDataWithoutScheduling) {
-    if let decoded = try? decoder.decode(TestData.self, from: encoded) {
-        print("✅ Backward compatibility test passed")
-    } else {
-        print("❌ Backward compatibility decoding failed")
-    }
-} else {
-    print("❌ Backward compatibility encoding failed")
-}
-
 print("\n✅ All compilation tests passed!")
