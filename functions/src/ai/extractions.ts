@@ -93,7 +93,7 @@ export const extractActionItems = onCall<ExtractActionItemsRequest>(async (reque
     try {
       messagesSnapshot = await conversationRef
         .collection("messages")
-        .where("timestamp", ">=", cutoffDate)
+        .where("timestamp", ">=", admin.firestore.Timestamp.fromDate(cutoffDate))
         .orderBy("timestamp", "asc")
         .limit(100) // Limit to prevent excessive token usage
         .get();

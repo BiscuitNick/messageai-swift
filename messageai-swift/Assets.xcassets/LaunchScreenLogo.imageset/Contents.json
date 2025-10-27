@@ -1,15 +1,17 @@
 {
   "images" : [
     {
-      "filename" : "dash-logo.jpg",
+      "filename" : "dash-200x200.jpg",
       "idiom" : "universal",
       "scale" : "1x"
     },
     {
+      "filename" : "dash-400x400.jpg",
       "idiom" : "universal",
       "scale" : "2x"
     },
     {
+      "filename" : "dash-400x400 1.jpg",
       "idiom" : "universal",
       "scale" : "3x"
     }

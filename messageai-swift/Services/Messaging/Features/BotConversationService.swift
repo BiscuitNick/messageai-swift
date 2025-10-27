@@ -49,15 +49,17 @@ final class BotConversationService {
         let participantSet = Set([currentUserId, botParticipantId])
 
         // Check for existing local conversation
+        // Note: Can't use participantIds in predicate since it's a computed property
         let localDescriptor = FetchDescriptor<ConversationEntity>(
             predicate: #Predicate<ConversationEntity> { conversation in
-                conversation.participantIds.contains(botParticipantId) &&
-                conversation.participantIds.contains(currentUserId) &&
                 conversation.isGroup == false
             }
         )
 
-        if let existing = try modelContext.fetch(localDescriptor).first {
+        let allConversations = try modelContext.fetch(localDescriptor)
+        if let existing = allConversations.first(where: { conversation in
+            Set(conversation.participantIds) == participantSet
+        }) {
             #if DEBUG
             print("[BotConversationService] Found existing bot conversation: \(existing.id)")
             #endif
@@ -66,12 +68,12 @@ final class BotConversationService {
 
         // Check Firestore for existing conversation
         let snapshot = try await db.collection("conversations")
-            .whereField("participants", arrayContains: currentUserId)
+            .whereField("participantIds", arrayContains: currentUserId)
             .getDocuments()
 
         for document in snapshot.documents {
             let data = document.data()
-            let participants = SwiftDataHelper.stringArray(from: data["participants"])
+            let participants = SwiftDataHelper.stringArray(from: data["participantIds"])
             let isGroup = data["isGroup"] as? Bool ?? false
 
             if !isGroup && Set(participants) == participantSet {
@@ -87,28 +89,23 @@ final class BotConversationService {
         // Create new bot conversation
         let conversationId = UUID().uuidString
         let timestamp = Timestamp(date: Date())
-        let welcomeText = welcomeMessage(for: botId)
 
         let conversationData: [String: Any] = [
-            "participants": Array(participantSet),
+            "participantIds": Array(participantSet),
             "isGroup": false,
             "createdAt": timestamp,
             "updatedAt": timestamp,
-            "lastMessage": welcomeText,
-            "lastMessageTimestamp": timestamp,
-            "lastMessageSenderId": botParticipantId,
-            "unreadCount": [currentUserId: 1] // Bot's welcome message is unread
+            "lastMessage": NSNull(),
+            "lastMessageTimestamp": NSNull(),
+            "lastMessageSenderId": NSNull(),
+            "unreadCount": [:] // No unread messages initially
         ]
 
         // Create conversation in Firestore
         try await db.collection("conversations").document(conversationId).setData(conversationData)
 
-        // Send welcome message from bot
-        try await sendBotWelcomeMessage(
-            conversationId: conversationId,
-            botId: botId,
-            welcomeText: welcomeText
-        )
+        // Note: Welcome message removed due to Firebase security rules
+        // Bot messages should be sent through Cloud Functions with proper authentication
 
         // Cache to local
         try await cacheConversation(id: conversationId, data: conversationData)
@@ -126,6 +123,9 @@ final class BotConversationService {
     ///   - text: Message text
     ///   - botUserId: Bot user ID (with "bot:" prefix)
     /// - Throws: MessagingError or Firestore errors
+    /// - Important: This method will fail with standard Firebase security rules
+    ///   since bots aren't authenticated users. Bot messages should be sent
+    ///   through Cloud Functions with admin privileges.
     func sendMessageAsBot(conversationId: String, text: String, botUserId: String) async throws {
         guard Auth.auth().currentUser != nil else {
             throw MessagingError.notAuthenticated
@@ -197,7 +197,7 @@ final class BotConversationService {
             throw MessagingError.dataUnavailable
         }
 
-        let participants = SwiftDataHelper.stringArray(from: data["participants"])
+        let participants = SwiftDataHelper.stringArray(from: data["participantIds"])
         let isGroup = data["isGroup"] as? Bool ?? false
         let groupName = data["groupName"] as? String
         let createdAt = SwiftDataHelper.parseTimestamp(data["createdAt"])

@@ -77,7 +77,7 @@ struct ProfileView: View {
 
                 Section("Team Coordination") {
                     NavigationLink {
-                        CoordinationDashboardView()
+                        CoordinationDashboardView(currentUser: displayedUser)
                     } label: {
                         Label("Coordination Dashboard", systemImage: "chart.bar.doc.horizontal")
                     }
